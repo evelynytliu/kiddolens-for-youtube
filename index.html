@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeTube Kids | Ad-Free Viewing</title>
+  <!-- Fonts: Quicksand for UI, Nunito for Headers -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800&family=Quicksand:wght@500;700&display=swap"
+    rel="stylesheet">
+  <style>
+    /* Preliminary Critical CSS to prevent FOUC */
+    body {
+      margin: 0;
+      font-family: 'Quicksand', sans-serif;
+      background-color: #fcefee;
+      /* Soft pastel pink/white */
+      color: #333;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="app-header glass">
+      <div class="logo-container">
+        <span class="logo-icon">🎈</span>
+        <h1 class="logo-text">SafeTube</h1>
+      </div>
+      <div class="header-controls">
+        <button id="refresh-btn" class="icon-btn" title="Refresh Videos">🔄</button>
+        <button id="settings-btn" class="icon-btn" title="Parent Settings">⚙️</button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="video-grid" id="video-container">
+      <!-- Video cards will be injected here via JS -->
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Loading fun videos...</p>
+      </div>
+    </main>
+
+    <!-- Video Player Modal -->
+    <div id="player-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-dark">
+        <button id="close-player" class="close-btn">❌ Close</button>
+        <div class="video-wrapper">
+          <div id="youtube-player"></div>
+          <!-- Iframe will appear here -->
+        </div>
+        <div class="video-info">
+          <h2 id="video-title">Video Title</h2>
+          <p id="video-channel">Channel Name</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal (Parent Gate) -->
+    <div id="settings-modal" class="modal-overlay hidden">
+      <div class="modal-content glass">
+        <button id="close-settings" class="close-btn-corner">✖</button>
+        <h2>Parent Settings 🔒</h2>
+
+        <section class="settings-section">
+          <h3>YouTube API Key</h3>
+          <p class="small-text">Required to fetch videos. Your key is stored locally in your browser.</p>
+          <input type="password" id="api-key-input" placeholder="Paste your API Key here" />
+          <button id="save-api-key" class="primary-btn">Save Key</button>
+          <p id="api-status" class="status-msg"></p>
+        </section>
+
+        <section class="settings-section">
+          <h3>Manage Channels</h3>
+          <div class="add-channel-form">
+            <div class="search-wrapper">
+              <input type="text" id="channel-search-input" placeholder="Search Channel Name (e.g., Peppa Pig)..."
+                autocomplete="off" />
+              <ul id="search-results-dropdown" class="search-dropdown hidden"></ul>
+            </div>
+            <!-- Optional: Keep manual add if needed, but search is primary now -->
+          </div>
+          <ul id="channel-list" class="channel-list">
+            <!-- List of added channels -->
+          </ul>
+          <p class="small-text">Tip: Find Channel ID in the URL of a channel's 'About' page.</p>
+        </section>
+      </div>
+    </div>
+
+    <!-- Parent Gate Challenge Modal -->
+    <div id="gate-modal" class="modal-overlay hidden">
+      <div class="modal-content glass small-modal">
+        <h3>Parents Only! 🛡️</h3>
+        <p id="gate-question"></p>
+        <input type="number" id="gate-answer" placeholder="Answer" />
+        <button id="gate-submit" class="primary-btn">Unlock</button>
+      </div>
+    </div>
+
+  </div>
+  <script type="module" src="/src/main.js"></script>
+  <!-- Add YouTube Iframe API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+</body>
+
+</html>

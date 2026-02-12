@@ -163,12 +163,27 @@ function initializeGSI(clientId) {
         }
         state.accessToken = response.access_token;
         loginBtn.textContent = 'Syncing...';
+        loginBtn.disabled = true; // Temporary disable while syncing
         await syncWithDrive();
-        loginBtn.textContent = 'Synced with Google';
-        loginBtn.disabled = true;
+        loginBtn.textContent = '🔄 Re-sync from Google';
+        loginBtn.disabled = false; // Re-enable for manual sync
+        loginBtn.onclick = async () => {
+          loginBtn.textContent = 'Syncing...';
+          loginBtn.disabled = true;
+          await syncWithDrive();
+          loginBtn.textContent = '🔄 Re-sync from Google';
+          loginBtn.disabled = false;
+        };
       },
     });
     loginBtn.style.display = 'block';
+    // If we already have a token (rare in this flow but possible), update UI
+    if (state.accessToken) {
+      loginBtn.textContent = '🔄 Re-sync from Google';
+    } else {
+      loginBtn.textContent = 'Login with Google to Sync';
+    }
+
   } catch (e) {
     console.error("GSI Init Error", e);
   }
@@ -185,11 +200,19 @@ async function syncWithDrive() {
         saveLocalData(); // Save to local but don't re-trigger upload
         updateProfileUI();
         renderChannelList();
-        fetchAllVideos();
+        // If API key exists, fetch videos AND icons
+        if (state.data.apiKey) {
+          fetchAllVideos(true); // Force refresh
+          setTimeout(fetchMissingChannelIcons, 1000); // Check icons
+        }
         alert('Settings loaded from Google Drive!');
       }
+    } else {
+      console.log('No config file found on Drive, creating new...');
+      await saveToDrive(); // First time sync
     }
   } else {
+    console.log('No config file found on Drive, creating new...');
     await saveToDrive();
   }
 }
@@ -249,11 +272,12 @@ async function downloadConfigFile(fileId) {
 }
 
 // --- Video Fetching ---
+const CORS_PROXY = 'https://api.allorigins.win/get?url=';
+
 // --- Video Fetching ---
 const CACHE_DURATION = 1000 * 60 * 60; // 1 Hour
 
 async function fetchAllVideos(forceRefresh = false) {
-  if (!state.data.apiKey) return;
   const profile = getCurrentProfile();
 
   if (!profile.channels || profile.channels.length === 0) {
@@ -263,7 +287,10 @@ async function fetchAllVideos(forceRefresh = false) {
     return;
   }
 
-  // 1. Check Cache
+  // 0. Decide Mode: API Key vs RSS (Lite Mode)
+  const useLiteMode = !state.data.apiKey;
+
+  // 1. Check Cache (Works for both modes)
   const cacheKey = `safetube_cache_${profile.id}`;
   const cachedData = localStorage.getItem(cacheKey);
 
@@ -299,12 +326,33 @@ async function fetchAllVideos(forceRefresh = false) {
   `;
 
   try {
-    const validChannels = profile.channels.filter(c => c && c.id);
-    const promises = validChannels.map(channel => fetchChannelVideos(channel));
-    const results = await Promise.all(promises);
-    const checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    let checkVideos = [];
+
+    if (useLiteMode) {
+      // --- Lite Mode (RSS) ---
+      console.log('Fetching videos via Lite Mode (RSS)...');
+      const promises = profile.channels.map(channel => fetchChannelRSS(channel));
+      const results = await Promise.all(promises);
+      checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+      apiStatus.textContent = 'Lite Mode (Free): Shows recent 15 videos only.';
+      apiStatus.style.color = '#FFA500'; // Warning Orange
+
+    } else {
+      // --- API Mode ---
+      const validChannels = profile.channels.filter(c => c && c.id);
+      const promises = validChannels.map(channel => fetchChannelVideos(channel));
+      const results = await Promise.all(promises);
+      checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+      apiStatus.textContent = 'Updated now (API Mode).';
+      apiStatus.style.color = '#4ecdc4';
+
+      fetchMissingChannelIcons(); // Only in Full API Mode
+    }
 
     state.videos = checkVideos;
+
     // Save to Cache
     const cacheKey = `safetube_cache_${profile.id}`;
     localStorage.setItem(cacheKey, JSON.stringify({
@@ -313,7 +361,7 @@ async function fetchAllVideos(forceRefresh = false) {
     }));
 
     // Save potentially updated channel info (uploadsId)
-    saveLocalData();
+    if (!useLiteMode) saveLocalData();
 
     // Reset Filter on New Fetch? Or keep?
     // Let's reset to ALL when fetching fresh videos.
@@ -326,20 +374,72 @@ async function fetchAllVideos(forceRefresh = false) {
     updateSortUI();
     renderVideos();
 
-    fetchMissingChannelIcons(); // Auto-fix missing avatars
-
-    apiStatus.textContent = 'Updated now.';
-    apiStatus.style.color = '#4ecdc4';
-
   } catch (error) {
-    console.error('Error fetching videos:', error);
-    apiStatus.textContent = 'Error: ' + error.message;
-    apiStatus.style.color = '#ff6b6b';
-    videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
-        <p>😕 Something went wrong.</p>
-        <p style="color:red; font-size: 0.8rem;">${error.message}</p>
-        <p>Check API Key or internet.</p>
-    </div>`;
+    if (useLiteMode) {
+      console.error('RSS Lite Mode Error:', error);
+      apiStatus.textContent = 'Error: Cannot fetch RSS feed.';
+      apiStatus.style.color = '#ff6b6b';
+      videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
+            <p>😕 Lite Mode failed.</p>
+            <p>Try refreshing or adding an API Key for stability.</p>
+        </div>`;
+    } else {
+      console.error('Error fetching videos:', error);
+      apiStatus.textContent = 'Error: ' + error.message;
+      apiStatus.style.color = '#ff6b6b';
+      videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
+            <p>😕 Something went wrong (API Mode).</p>
+            <p style="color:red; font-size: 0.8rem;">${error.message}</p>
+            <p>Check API Key or internet.</p>
+        </div>`;
+    }
+  }
+}
+
+// --- Lite Mode: RSS Fetcher ---
+async function fetchChannelRSS(channel) {
+  // Public YouTube RSS Feed URL
+  const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
+  // Use AllOrigins as CORS Proxy
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`;
+
+  try {
+    const res = await fetch(proxyUrl);
+    const data = await res.json();
+
+    if (!data.contents) return [];
+
+    // Parse XML
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(data.contents, "text/xml");
+    const entries = xmlDoc.getElementsByTagName("entry");
+
+    const videos = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const videoId = entry.getElementsByTagName("yt:videoId")[0]?.textContent;
+      const title = entry.getElementsByTagName("title")[0]?.textContent;
+      const published = entry.getElementsByTagName("published")[0]?.textContent;
+
+      if (videoId) {
+        // RSS doesn't give good thumbnails, so we construct standard YT thumbnail URL
+        const thumb = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+
+        videos.push({
+          id: videoId,
+          title: title,
+          thumbnail: thumb,
+          channelTitle: channel.name, // Use our name as RSS might differ slightly
+          channelId: channel.id,
+          publishedAt: published
+        });
+      }
+    }
+    return videos;
+
+  } catch (e) {
+    console.warn(`RSS fetch failed for ${channel.name}`, e);
+    return [];
   }
 }
 

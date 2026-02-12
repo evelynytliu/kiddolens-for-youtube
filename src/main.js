@@ -3,9 +3,89 @@
 // Configuration & State
 const STORAGE_KEY_API = 'safetube_api_key';
 const STORAGE_KEY_DATA = 'safetube_data';
-const SCOPES = 'https://www.googleapis.com/auth/drive.appdata';
+// Change Scope to treat file as a normal visible file
+const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
-// --- SECURITY: Client ID ---
+// ...
+
+async function saveToDrive() {
+  if (!state.accessToken) return;
+
+  // Clean data before saving (remove large cached videos to save space/bandwidth)
+  const cleanData = JSON.parse(JSON.stringify(state.data));
+  // Optional: We could strip 'channels' details here if we only want to save IDs, 
+  // but for now let's keep it simple. Smart sync is better.
+
+  const configData = {
+    ...cleanData,
+    lastUpdated: new Date().toISOString()
+  };
+
+  const fileId = await findConfigFile();
+  const blob = new Blob([JSON.stringify(configData)], { type: 'application/json' });
+
+  // Metadata: Save to Root (Visible to User)
+  const metadata = {
+    name: 'safetube_settings.json', // New visible filename
+    mimeType: 'application/json'
+    // No 'parents' means root folder
+  };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', blob);
+
+  let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+  let method = 'POST';
+
+  if (fileId) {
+    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
+    method = 'PATCH';
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: method,
+      headers: {
+        'Authorization': 'Bearer ' + state.accessToken
+      },
+      body: form
+    });
+    if (!res.ok) throw new Error(res.statusText);
+    console.log('Saved to Drive (Visible File)');
+  } catch (e) {
+    console.error('Save to Drive failed', e);
+    alert('Cloud Save Failed: ' + e.message);
+  }
+}
+
+async function findConfigFile() {
+  // Search in visible drive, explicitly for our file
+  const q = "name = 'safetube_settings.json' and trashed = false";
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}`, {
+      headers: { 'Authorization': 'Bearer ' + state.accessToken }
+    });
+    const data = await res.json();
+    return data.files && data.files.length > 0 ? data.files[0].id : null;
+  } catch (e) {
+    console.error('Find config failed', e);
+    return null;
+  }
+}
+
+async function downloadConfigFile(fileId) {
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { 'Authorization': 'Bearer ' + state.accessToken }
+    });
+    return await res.json();
+  } catch (e) {
+    console.error('Download config failed', e);
+    return null;
+  }
+}
+// Old implementations removed. Using the new ones at the top.
 const GOOGLE_CLIENT_ID = '959694478718-pksctjg2pbmtd1fnvp9geha2imqbi72j.apps.googleusercontent.com';
 
 // Default Data Structure
@@ -217,59 +297,7 @@ async function syncWithDrive() {
   }
 }
 
-async function saveToDrive() {
-  if (!state.accessToken) return;
-
-  const configData = {
-    ...state.data,
-    lastUpdated: new Date().toISOString()
-  };
-
-  const fileId = await findConfigFile();
-  const blob = new Blob([JSON.stringify(configData)], { type: 'application/json' });
-  const metadata = {
-    name: 'safetube_config.json',
-    mimeType: 'application/json',
-    parents: ['appDataFolder']
-  };
-
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', blob);
-
-  let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-  let method = 'POST';
-
-  if (fileId) {
-    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
-    method = 'PATCH';
-  }
-
-  await fetch(url, {
-    method: method,
-    headers: {
-      'Authorization': 'Bearer ' + state.accessToken
-    },
-    body: form
-  });
-  console.log('Saved to Drive');
-}
-
-async function findConfigFile() {
-  const q = "name = 'safetube_config.json' and 'appDataFolder' in parents and trashed = false";
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&spaces=appDataFolder`, {
-    headers: { 'Authorization': 'Bearer ' + state.accessToken }
-  });
-  const data = await res.json();
-  return data.files && data.files.length > 0 ? data.files[0].id : null;
-}
-
-async function downloadConfigFile(fileId) {
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-    headers: { 'Authorization': 'Bearer ' + state.accessToken }
-  });
-  return await res.json();
-}
+// Old implementations removed. Using the new ones at the top.
 
 // --- Video Fetching ---
 const CORS_PROXY = 'https://api.allorigins.win/get?url=';

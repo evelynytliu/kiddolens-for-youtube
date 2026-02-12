@@ -192,17 +192,17 @@ function init() {
   updateProfileUI(); // This also renders channel nav
   renderChannelList();
 
-  if (!state.data.apiKey) {
-    state.videos = MOCK_VIDEOS;
-    renderVideos();
-    apiStatus.textContent = 'Demo Mode: Add API Key for real content.';
-    apiStatus.style.color = 'orange';
-  } else {
-    fetchAllVideos();
-  }
+  updateProfileUI(); // This also renders channel nav
+  renderChannelList();
+
+  // Always attempt to fetch videos (API or RSS)
+  // Check if we need to force refreshing cache due to channel changes?
+  // For now, let fetchAllVideos handle cache validation.
+  fetchAllVideos();
 
   setupEventListeners();
 }
+
 
 function loadLocalData() {
   const rawData = localStorage.getItem(STORAGE_KEY_DATA);
@@ -339,19 +339,31 @@ async function fetchAllVideos(forceRefresh = false) {
       const { timestamp, videos } = JSON.parse(cachedData);
       const age = Date.now() - timestamp;
       if (age < CACHE_DURATION) {
-        console.log('Using cached videos');
-        state.videos = videos;
+        // Filter: Only keep videos from channels that are still in our profile
+        const currentChannelIds = new Set(profile.channels.map(c => c.id));
+        const validVideos = videos.filter(v => currentChannelIds.has(v.channelId));
 
-        // Restore sort/filter state if needed, or just render
-        state.activeChannelId = null;
-        state.currentSort = 'newest';
+        // If we have valid videos, use them. 
+        // If the cache is empty (but valid?) or we filtered something out?
+        // Actually, if we filtered out videos, the resulting list might be empty.
+        // If it's valid videos, show them.
 
-        renderChannelNav();
-        updateSortUI();
-        renderVideos();
-        apiStatus.textContent = `Loaded from cache (${Math.round(age / 60000)}m ago).`;
-        apiStatus.style.color = '#4ecdc4';
-        return;
+        if (validVideos.length > 0) {
+          console.log('Using cached videos (filtered)');
+          state.videos = validVideos;
+
+          state.activeChannelId = null;
+          state.currentSort = 'newest';
+
+          renderChannelNav();
+          updateSortUI();
+          renderVideos();
+          apiStatus.textContent = `Loaded from cache (${Math.round(age / 60000)}m ago).`;
+          apiStatus.style.color = '#4ecdc4';
+          return;
+        } else if (videos.length > 0) {
+          console.log('Cache invalid (all videos belong to deleted channels), fetching fresh...');
+        }
       }
     } catch (e) {
       console.warn('Cache parse error', e);

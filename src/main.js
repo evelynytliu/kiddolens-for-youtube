@@ -16,9 +16,9 @@ const DEFAULT_DATA = {
       id: DEFAULT_PROFILE_ID,
       name: 'Default Child',
       channels: [
-        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes' },
-        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs' },
-        { id: 'UXI_4T5eMWe8s_8jATfD_25g', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories' }
+        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLRbdv3Di8paQyrgMF_VwFXPkhwVzcW59Vgo8dTsyw=s88-c-k-c0x00ffffff-no-rj' },
+        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLSGzJceA7O2jO7C7HHaQv5y5U-y7Sg_rQe6kX5G=s88-c-k-c0x00ffffff-no-rj' },
+        { id: 'UXI_4T5eMWe8s_8jATfD_25g', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLTkv3M_k-hSj5uV8t3y6jF_5_k_j5_k_j5_k=s88-c-k-c0x00ffffff-no-rj' }
       ]
     }
   ],
@@ -77,16 +77,15 @@ const newProfileNameInput = document.getElementById('new-profile-name');
 const addProfileBtn = document.getElementById('add-profile-btn');
 const profileListContainer = document.getElementById('profile-list-container');
 const profileDropdown = document.getElementById('profile-dropdown');
+const channelNav = document.getElementById('channel-nav'); // New Element
+const videoCount = document.getElementById('video-count');
+const sortButtons = document.querySelectorAll('.sort-btn');
 
 // --- Initialization ---
 function init() {
   loadLocalData();
 
   // Initialize GSI
-  // Priority: 1. Code-embedded ID (GOOGLE_CLIENT_ID)
-  //           2. LocalStorage (legacy/manual entry)
-  // If user hasn't replaced the placeholder, we check LocalStorage.
-
   if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
     initializeGSI(GOOGLE_CLIENT_ID);
   } else {
@@ -98,7 +97,7 @@ function init() {
     }
   }
 
-  updateProfileUI();
+  updateProfileUI(); // This also renders channel nav
   renderChannelList();
 
   if (!state.data.apiKey) {
@@ -250,7 +249,10 @@ async function downloadConfigFile(fileId) {
 }
 
 // --- Video Fetching ---
-async function fetchAllVideos() {
+// --- Video Fetching ---
+const CACHE_DURATION = 1000 * 60 * 60; // 1 Hour
+
+async function fetchAllVideos(forceRefresh = false) {
   if (!state.data.apiKey) return;
   const profile = getCurrentProfile();
 
@@ -261,6 +263,34 @@ async function fetchAllVideos() {
     return;
   }
 
+  // 1. Check Cache
+  const cacheKey = `safetube_cache_${profile.id}`;
+  const cachedData = localStorage.getItem(cacheKey);
+
+  if (!forceRefresh && cachedData) {
+    try {
+      const { timestamp, videos } = JSON.parse(cachedData);
+      const age = Date.now() - timestamp;
+      if (age < CACHE_DURATION) {
+        console.log('Using cached videos');
+        state.videos = videos;
+
+        // Restore sort/filter state if needed, or just render
+        state.activeChannelId = null;
+        state.currentSort = 'newest';
+
+        renderChannelNav();
+        updateSortUI();
+        renderVideos();
+        apiStatus.textContent = `Loaded from cache (${Math.round(age / 60000)}m ago).`;
+        apiStatus.style.color = '#4ecdc4';
+        return;
+      }
+    } catch (e) {
+      console.warn('Cache parse error', e);
+    }
+  }
+
   videoContainer.innerHTML = `
     <div class="loading-state">
       <div class="spinner"></div>
@@ -269,35 +299,76 @@ async function fetchAllVideos() {
   `;
 
   try {
-    const promises = profile.channels.map(channel => fetchChannelVideos(channel.id));
+    const validChannels = profile.channels.filter(c => c && c.id);
+    const promises = validChannels.map(channel => fetchChannelVideos(channel));
     const results = await Promise.all(promises);
     const checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
     state.videos = checkVideos;
+    // Save to Cache
+    const cacheKey = `safetube_cache_${profile.id}`;
+    localStorage.setItem(cacheKey, JSON.stringify({
+      timestamp: Date.now(),
+      videos: state.videos
+    }));
+
+    // Save potentially updated channel info (uploadsId)
+    saveLocalData();
+
+    // Reset Filter on New Fetch? Or keep?
+    // Let's reset to ALL when fetching fresh videos.
+    state.activeChannelId = null;
+    state.currentSort = 'newest'; // Default
+
+    state.currentSort = 'newest'; // Default
+
+    renderChannelNav(); // Re-render to clear active state if needed or ensure sync
+    updateSortUI();
     renderVideos();
-    apiStatus.textContent = 'Connected! Videos updated.';
+
+    fetchMissingChannelIcons(); // Auto-fix missing avatars
+
+    apiStatus.textContent = 'Updated now.';
     apiStatus.style.color = '#4ecdc4';
 
   } catch (error) {
     console.error('Error fetching videos:', error);
-    apiStatus.textContent = 'Error fetching videos.';
+    apiStatus.textContent = 'Error: ' + error.message;
     apiStatus.style.color = '#ff6b6b';
-    videoContainer.innerHTML = `<p style="text-align:center; padding: 2rem;">😕 Change API Key or check internet.</p>`;
+    videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
+        <p>😕 Something went wrong.</p>
+        <p style="color:red; font-size: 0.8rem;">${error.message}</p>
+        <p>Check API Key or internet.</p>
+    </div>`;
   }
 }
 
-async function fetchChannelVideos(channelId) {
-  const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channelId}&key=${state.data.apiKey}`;
+async function fetchChannelVideos(channel) {
+  // Optimization: If we already have uploadsId, skip first call
+  let uploadsPlaylistId = channel.uploadsId;
+
+  if (!uploadsPlaylistId) {
+    // Fetch uploads ID cost: 1 unit
+    const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channel.id}&key=${state.data.apiKey}`;
+    try {
+      const chRes = await fetch(channelUrl);
+      const chData = await chRes.json();
+
+      if (!chData.items || chData.items.length === 0) return [];
+      uploadsPlaylistId = chData.items[0].contentDetails.relatedPlaylists.uploads;
+
+      // Save for next time!
+      channel.uploadsId = uploadsPlaylistId;
+    } catch (e) {
+      console.error(`Failed to fetch channel details for ${channel.id}`, e);
+      return [];
+    }
+  }
+
+  // Fetch Videos cost: 1 unit
+  const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=10&key=${state.data.apiKey}`;
 
   try {
-    const chRes = await fetch(channelUrl);
-    const chData = await chRes.json();
-
-    if (!chData.items || chData.items.length === 0) return [];
-
-    const uploadsPlaylistId = chData.items[0].contentDetails.relatedPlaylists.uploads;
-
-    const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=10&key=${state.data.apiKey}`;
     const plRes = await fetch(plUrl);
     const plData = await plRes.json();
 
@@ -308,14 +379,92 @@ async function fetchChannelVideos(channelId) {
       title: item.snippet.title,
       thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
       channelTitle: item.snippet.channelTitle,
+      channelId: channel.id, // Store Channel ID
       publishedAt: item.snippet.publishedAt
     }));
 
   } catch (e) {
-    console.error(`Failed to fetch for ${channelId}`, e);
+    console.error(`Failed to fetch videos for ${channel.id}`, e);
     return [];
   }
 }
+
+// --- Sorting Logic ---
+function sortVideos(sortType) {
+  state.currentSort = sortType;
+  updateSortUI();
+  renderVideos();
+}
+
+function updateSortUI() {
+  sortButtons.forEach(btn => {
+    if (btn.dataset.sort === state.currentSort) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+}
+
+function getSortedVideos(videos) {
+  const v = [...videos]; // Copy array
+  if (state.currentSort === 'newest') {
+    return v.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  } else if (state.currentSort === 'oldest') {
+    return v.sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt));
+  } else if (state.currentSort === 'shuffle') {
+    // Fisher-Yates Shuffle
+    for (let i = v.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [v[i], v[j]] = [v[j], v[i]];
+    }
+    return v;
+  }
+  return v;
+}
+
+// --- Icon Auto-Fetch ---
+async function fetchMissingChannelIcons() {
+  if (!state.data.apiKey) return;
+  const profile = getCurrentProfile();
+
+  // Find channels without thumbnails
+  const missingIcons = profile.channels.filter(c => !c.thumbnail);
+
+  if (missingIcons.length === 0) return; // All good
+
+  console.log(`Fetching icons for ${missingIcons.length} channels...`);
+
+  // YouTube API allows fetching up to 50 ids at once
+  const ids = missingIcons.map(c => c.id).join(',');
+  const url = `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`;
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.items) {
+      let updated = false;
+      data.items.forEach(item => {
+        const channel = profile.channels.find(c => c.id === item.id);
+        if (channel) {
+          channel.thumbnail = item.snippet.thumbnails.default?.url;
+          updated = true;
+        }
+      });
+
+      if (updated) {
+        saveLocalData();
+        renderChannelNav(); // Refresh nav to show new icons
+        console.log('Channel icons updated!');
+        if (state.accessToken) saveToDrive(); // Sync changes
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to auto-fetch channel icons', e);
+  }
+}
+
 
 // --- Channel Search ---
 let searchDebounce;
@@ -363,7 +512,8 @@ function addChannelFromSearch(item) {
   const profile = getCurrentProfile();
   const newChannel = {
     id: item.snippet.channelId,
-    name: item.snippet.channelTitle
+    name: item.snippet.channelTitle,
+    thumbnail: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.high?.url || item.snippet.thumbnails.default?.url || '' // Store Thumbnail
   };
 
   if (profile.channels.some(c => c.id === newChannel.id)) {
@@ -374,10 +524,11 @@ function addChannelFromSearch(item) {
   profile.channels.push(newChannel);
   saveLocalData();
   renderChannelList();
+  renderChannelNav(); // Update Nav
 
   channelSearchInput.value = '';
   searchResultsDropdown.classList.add('hidden');
-  fetchAllVideos();
+  fetchAllVideos(); // Will refresh videos
 }
 
 
@@ -389,6 +540,42 @@ function updateProfileUI() {
 
   renderProfileList();
   renderProfileDropdown();
+  renderChannelNav(); // Render nav for current profile
+}
+
+function renderChannelNav() {
+  if (!channelNav) return;
+  const profile = getCurrentProfile();
+  channelNav.innerHTML = '';
+
+  // "All" Button
+  const allBtn = document.createElement('div');
+  allBtn.className = `nav-item ${state.activeChannelId === null ? 'active' : ''}`;
+  allBtn.innerHTML = `<span>All Videos</span>`;
+  allBtn.onclick = () => filterVideos(null);
+  channelNav.appendChild(allBtn);
+
+  // Channel Buttons
+  profile.channels.forEach(channel => {
+    const btn = document.createElement('div');
+    btn.className = `nav-item ${state.activeChannelId === channel.id ? 'active' : ''}`;
+
+    // Add Avatar if exists
+    let avatarHtml = '';
+    if (channel.thumbnail) {
+      avatarHtml = `<img src="${channel.thumbnail}" class="nav-avatar" alt="" />`;
+    }
+
+    btn.innerHTML = `${avatarHtml}<span>${channel.name}</span>`;
+    btn.onclick = () => filterVideos(channel.id);
+    channelNav.appendChild(btn);
+  });
+}
+
+function filterVideos(channelId) {
+  state.activeChannelId = channelId;
+  renderChannelNav(); // Update visual state
+  renderVideos();     // Re-render video list
 }
 
 function renderProfileDropdown() {
@@ -421,7 +608,10 @@ function renderProfileList() {
     div.innerHTML = `
             <span>${p.name} <small>(${p.channels.length} channels)</small></span>
             <div class="profile-actions">
-                ${p.id === state.data.currentProfileId ? '<span style="font-size:0.8rem; color:green; display:flex; align-items:center;">Active</span>' : ''}
+                ${p.id === state.data.currentProfileId
+        ? '<span style="font-size:0.8rem; color:green; display:flex; align-items:center;">Active</span>'
+        : `<button class="btn-small btn-select" data-id="${p.id}">Switch</button>`
+      }
                 <button class="btn-small btn-edit" data-id="${p.id}">Edit</button>
                 ${state.data.profiles.length > 1 ? `<button class="btn-small btn-delete" data-id="${p.id}">Delete</button>` : ''}
             </div>
@@ -430,6 +620,9 @@ function renderProfileList() {
   });
 
   // Attach listeners
+  profileListContainer.querySelectorAll('.btn-select').forEach(btn => {
+    btn.onclick = () => switchProfile(btn.dataset.id);
+  });
   profileListContainer.querySelectorAll('.btn-edit').forEach(btn => {
     btn.onclick = () => editProfileName(btn.dataset.id);
   });
@@ -440,11 +633,31 @@ function renderProfileList() {
 
 function renderVideos() {
   videoContainer.innerHTML = '';
-  if (state.videos.length === 0) {
-    videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found. Check settings.</p>';
+
+  // Filter logic
+  let displayVideos = state.videos;
+  if (state.activeChannelId) {
+    displayVideos = state.videos.filter(v => v.channelId === state.activeChannelId);
+  }
+
+  // Sort
+  displayVideos = getSortedVideos(displayVideos);
+
+  // Update Count
+  if (videoCount) {
+    videoCount.textContent = `${displayVideos.length} videos`;
+  }
+
+  if (displayVideos.length === 0) {
+    if (state.activeChannelId) {
+      videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found for this channel.</p>';
+    } else {
+      videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found. Check settings.</p>';
+    }
     return;
   }
-  state.videos.forEach(video => {
+
+  displayVideos.forEach(video => {
     const card = document.createElement('div');
     card.className = 'video-card';
     card.onclick = () => openPlayer(video);
@@ -484,6 +697,7 @@ function renderChannelList() {
       profile.channels.splice(idx, 1);
       saveLocalData();
       renderChannelList();
+      renderChannelNav(); // Update nav on remove
       saveToDrive();
     };
   });
@@ -521,6 +735,7 @@ function addProfile(name) {
 
 function switchProfile(id) {
   state.data.currentProfileId = id;
+  state.activeChannelId = null; // Reset filter on switch
   saveLocalData();
   updateProfileUI();
   renderChannelList();
@@ -571,6 +786,11 @@ function setupEventListeners() {
     if (!profileDropdown.classList.contains('hidden') && !profileSelector.contains(e.target)) {
       profileDropdown.classList.add('hidden');
     }
+  });
+
+  // Sort Buttons
+  sortButtons.forEach(btn => {
+    btn.onclick = () => sortVideos(btn.dataset.sort);
   });
 
   document.getElementById('settings-btn').onclick = () => {

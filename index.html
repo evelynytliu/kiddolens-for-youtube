@@ -46,6 +46,20 @@
       </div>
     </header>
 
+    <nav id="channel-nav" class="channel-nav">
+      <!-- Channel Pills injected here -->
+    </nav>
+
+    <!-- Toolbar: Sort & Count -->
+    <div class="toolbar">
+      <span id="video-count" class="video-count">0 videos</span>
+      <div class="sort-controls">
+        <button class="sort-btn active" data-sort="newest" title="Newest First">📅 Newest</button>
+        <button class="sort-btn" data-sort="oldest" title="Oldest First">⏳ Oldest</button>
+        <button class="sort-btn" data-sort="shuffle" title="Shuffle Videos">🔀 Shuffle</button>
+      </div>
+    </div>
+
     <!-- Main Content Area -->
     <main class="video-grid" id="video-container">
       <!-- Video cards will be injected here via JS -->
@@ -88,10 +102,13 @@
         </section>
 
         <section class="settings-section">
-          <h3>Google Sync (Optional)</h3>
+          <h3>Google Sync</h3>
           <p class="small-text">Sync your channels across devices using Google Drive.</p>
-          <input type="text" id="client-id-input" placeholder="Google OAuth Client ID" />
-          <button id="save-client-id" class="secondary-btn">Save Client ID</button>
+          <!-- Client ID is now embedded, hiding input -->
+          <div style="display:none;">
+            <input type="text" id="client-id-input" placeholder="Google OAuth Client ID" />
+            <button id="save-client-id" class="secondary-btn">Save Client ID</button>
+          </div>
 
           <button id="google-login-btn" class="primary-btn" style="display:none; margin-top: 10px; width: 100%;">
             Login with Google

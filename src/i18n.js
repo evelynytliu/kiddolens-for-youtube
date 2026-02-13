@@ -27,6 +27,19 @@ export const translations = {
     api_help_step1: { en: "Go to Google Cloud Console.", zh: "前往 Google Cloud 控制台。" },
     api_help_step2: { en: "Create a New Project.", zh: "建立新專案。" },
     api_help_step3: { en: "Search for \"YouTube Data API v3\" and enable it.", zh: "搜尋 \"YouTube Data API v3\" 並啟用它。" },
+    // Onboarding Wizard
+    welcome_title: { en: "Welcome to SafeTube! 🌟", zh: "歡迎使用 SafeTube！🌟" },
+    welcome_desc: { en: "Let's create a safe space for your child.", zh: "讓我們為您的孩子建立一個安全的觀看空間。" },
+    step1_label: { en: "Child's Name:", zh: "孩子的名字：" },
+    step1_placeholder: { en: "e.g. Joy", zh: "例如：小寶" },
+    step2_label: { en: "Pick some channels to start:", zh: "選擇一些推薦頻道：" },
+    loading_recommendations: { en: "Loading safe channels...", zh: "正在載入安全頻道..." },
+    finish_setup: { en: "Start Watching! 🚀", zh: "開始觀看！🚀" },
+    setup_login_note: { en: "Tip: Login later to sync across devices.", zh: "提示：稍後登入以跨裝置同步設定。" },
+
+    // Tooltips & Status
+    onboarding_login_tooltip: { en: "✨ Setup complete! Login with Google to back up your list and sync across devices.", zh: "✨ 設定完成！使用 Google 登入來備份清單並跨裝置同步。" },
+
     api_help_step4: { en: "Go to Credentials → Create Credentials → API Key.", zh: "前往 憑證 → 建立憑證 → API 金鑰。" },
     api_help_step5: { en: "Copy the key and paste it here!", zh: "複製金鑰並貼到這裡！" },
     full_tutorial: { en: "Full Tutorial ↗", zh: "完整教學 ↗" },

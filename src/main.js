@@ -126,12 +126,8 @@ const DEFAULT_DATA = {
   profiles: [
     {
       id: DEFAULT_PROFILE_ID,
-      name: 'Default Child',
-      channels: [
-        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes' },
-        { id: 'UCLsooMJoIpl_7ux2jvdPB-Q', name: 'Super Simple Songs - Kids Songs' },
-        { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark' }
-      ]
+      name: '', // Empty name triggers Setup Wizard
+      channels: [] // Empty channels
     }
   ],
   currentProfileId: DEFAULT_PROFILE_ID,
@@ -349,32 +345,50 @@ async function fetchGoogleUserInfo() {
 function init() {
   loadLocalData();
 
-  // Initialize GSI
-  if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-    initializeGSI(GOOGLE_CLIENT_ID);
-  } else {
-    const legacyId = localStorage.getItem('safetube_client_id');
-    if (legacyId) {
-      initializeGSI(legacyId);
-    } else {
-      console.warn('Google Client ID not set.');
-    }
+  // Check if first-time setup is needed (Empty name in profile 0)
+  const currentProfile = getCurrentProfile();
+  if (!currentProfile || !currentProfile.name) {
+    showOnboardingWizard();
+    return; // Pause init until wizard finishes
   }
 
-  updateProfileUI(); // This also renders channel nav
-  renderChannelList();
-
-  // Always attempt to fetch videos (API or RSS)
-  fetchAllVideos();
-
+  updateProfileUI();
   setupEventListeners();
-  updateLanguageUI(); // Initialize language
+  setupSearch();
 
-  // Auto-fetch missing icons immediately
-  fetchMissingChannelIcons();
+  // Initialize GSI
+  // Try global ID or fallback
+  const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
+    ? GOOGLE_CLIENT_ID
+    : localStorage.getItem('safetube_client_id');
 
-  // Show onboarding tooltip for new users
-  showOnboardingTooltip();
+  if (clientId) initializeGSI(clientId);
+
+  // Show Onboarding Tooltip (Login Nudge) for users who finished setup but aren't logged in
+  // And haven't dismissed it
+  if (currentProfile && !state.accessToken && !localStorage.getItem('onboarding_dismissed')) {
+    setTimeout(() => {
+      const tooltip = document.getElementById('onboarding-tooltip');
+      // If tooltip element exists (it should be in HTML or added), show it
+      // OR create it if missing? 
+      if (tooltip) {
+        const textEl = tooltip.querySelector('.onboarding-text'); // Class from HTML? 
+        // Actually previous code used querySelector('span') or so.
+        // Let's use the helper if available, or just manipulate the visible one.
+        // But the old helper creates a DIFFERENT tooltip structure. 
+        // Let's rely on showOnboardingTooltip() but updated?
+        // No, let's just use the logic I wrote before:
+        if (tooltip.classList.contains('hidden')) tooltip.classList.remove('hidden'); // or add 'show'
+        tooltip.classList.add('show');
+        // Update text to nudge login
+        const textSpan = tooltip.querySelector('p'); // or .onboarding-text
+        if (textSpan) textSpan.innerHTML = t('onboarding_login_tooltip');
+      }
+    }, 3000);
+  }
+
+  fetchMissingChannelIcons(); // Background fetch
+  fetchAllVideos(); // Initial fetch
 }
 
 function showOnboardingTooltip() {
@@ -1883,6 +1897,165 @@ function setupEventListeners() {
       searchResultsDropdown.classList.add('hidden');
     }
   });
+}
+
+// --- Onboarding Wizard Logic ---
+async function showOnboardingWizard() {
+  // Create Modal Elements
+  const modal = document.createElement('div');
+  modal.className = 'wizard-modal';
+
+  modal.innerHTML = `
+    <div class="wizard-content">
+      <div class="wizard-step" id="wizard-step-1">
+        <h2 class="wizard-step-title">${t('welcome_title')}</h2>
+        <p class="wizard-desc">${t('welcome_desc')}</p>
+        
+        <div class="wizard-input-group">
+          <label>${t('step1_label')}</label>
+          <input type="text" id="wizard-child-name" placeholder="${t('step1_placeholder')}" autofocus autocomplete="off" />
+        </div>
+
+        <button class="wizard-btn-primary" id="wizard-next-btn" disabled>${t('next_step') || 'Next'}</button>
+      </div>
+
+      <div class="wizard-step" id="wizard-step-2" style="display:none;">
+        <h2 class="wizard-step-title">${t('step2_label')}</h2>
+        
+        <div id="channel-loading" class="channel-loading-area">${t('loading_recommendations')}</div>
+        <div class="wizard-channel-grid" id="wizard-channel-grid"></div>
+
+        <button class="wizard-btn-primary" id="wizard-finish-btn">${t('finish_setup')}</button>
+        <div class="wizard-skip" id="wizard-login-note" style="margin-top:20px; font-weight:bold; color:var(--primary-color); font-size: 0.9rem; text-align: center;">${t('setup_login_note')}</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Step 1 Logic
+  const nameInput = modal.querySelector('#wizard-child-name');
+  const nextBtn = modal.querySelector('#wizard-next-btn');
+  const step1 = modal.querySelector('#wizard-step-1');
+  const step2 = modal.querySelector('#wizard-step-2');
+
+  nameInput.oninput = () => {
+    nextBtn.disabled = nameInput.value.trim().length === 0;
+  };
+
+  // Enter key support
+  nameInput.onkeydown = (e) => {
+    if (e.key === 'Enter' && !nextBtn.disabled) nextBtn.click();
+  };
+
+  nextBtn.onclick = async () => {
+    const name = nameInput.value.trim();
+    if (!name) return;
+
+    // Update local profile name temporarily
+    state.data.profiles[0].name = name;
+
+    // Switch to Step 2
+    step1.style.display = 'none';
+    step2.style.display = 'block';
+
+    // Fetch Recommendations
+    await loadWizardRecommendations(modal);
+  };
+
+  // Step 2 Logic: Finish
+  const finishBtn = modal.querySelector('#wizard-finish-btn');
+  finishBtn.onclick = () => {
+    // 1. Get selected channels
+    const selected = document.querySelectorAll('.channel-option-card.selected');
+    const newChannels = [];
+    selected.forEach(card => {
+      newChannels.push({
+        id: card.dataset.id,
+        name: card.dataset.name,
+        thumbnail: card.dataset.thumb
+      });
+    });
+
+    // 2. Save to profile
+    state.data.profiles[0].channels = newChannels;
+    saveLocalData();
+
+    // 3. Close Modal & Init App
+    modal.remove();
+
+    // Re-init normal flow
+    // We need to re-run parts of init that were skipped
+    updateProfileUI(); // Show new name
+    setupEventListeners();
+    setupSearch();
+
+    // Initialize GSI if not already
+    if (!state.accessToken) initializeGSI(CLIENT_ID);
+
+    fetchAllVideos(true);
+    fetchMissingChannelIcons();
+
+    // Show Login Tooltip
+    setTimeout(() => {
+      const tooltip = document.getElementById('onboarding-tooltip');
+      if (tooltip) {
+        const textEl = tooltip.querySelector('span');
+        if (textEl) textEl.textContent = t('onboarding_login_tooltip');
+        tooltip.classList.add('show');
+      }
+    }, 1000);
+  };
+}
+
+async function loadWizardRecommendations(modal) {
+  const grid = modal.querySelector('#wizard-channel-grid');
+  const loader = modal.querySelector('#channel-loading');
+
+  try {
+    // Fetch Top Rankings + Default Recommendations
+    // We'll trust the ranking API to give us good stuff.
+    const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now());
+    const data = await response.json();
+
+    if (loader) loader.style.display = 'none';
+
+    if (data.channels && data.channels.length > 0) {
+      // Filter duplicates if any
+      // Shuffle/Randomize slightly? Or just top. Top is safer.
+      const unique = data.channels.slice(0, 16); // Show top 16
+
+      unique.forEach(channel => {
+        const card = document.createElement('div');
+        card.className = 'channel-option-card'; // Default unselected
+        card.dataset.id = channel.id;
+        card.dataset.name = channel.name;
+        card.dataset.thumb = channel.thumbnail || '';
+
+        // Use UI Avatar fallback if thumbnail missing
+        const thumbSrc = channel.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
+
+        const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}`;
+
+        card.innerHTML = `
+                  <img src="${thumbSrc}" class="channel-option-img" onerror="this.src='${fallback}'"/>
+                  <span class="channel-check-badge">✔</span>
+                  <div class="channel-option-label">${channel.name}</div>
+               `;
+
+        // Toggle Selection
+        card.onclick = () => {
+          card.classList.toggle('selected');
+        };
+
+        grid.appendChild(card);
+      });
+    } else {
+      if (grid) grid.innerHTML = '<p style="text-align:center; width:100%;">No recommendations available offline.</p>';
+    }
+  } catch (e) {
+    console.error(e);
+    if (loader) loader.textContent = "Could not load recommendations. Please check internet.";
+  }
 }
 
 // Start

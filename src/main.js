@@ -1069,6 +1069,22 @@ function setupEventListeners() {
     };
   }
 
+  // API Key Visibility Toggle
+  const toggleApiBtn = document.getElementById('toggle-api-visibility');
+  const apiKeyInput = document.getElementById('api-key-input');
+
+  if (toggleApiBtn && apiKeyInput) {
+    toggleApiBtn.onclick = () => {
+      if (apiKeyInput.type === 'password') {
+        apiKeyInput.type = 'text';
+        toggleApiBtn.textContent = '🔒'; // Lock icon for 'Hide' state (as implies privacy)
+      } else {
+        apiKeyInput.type = 'password';
+        toggleApiBtn.textContent = '👁️'; // Eye icon for 'Show' state
+      }
+    };
+  }
+
   document.getElementById('save-api-key').onclick = () => {
     const key = apiKeyInput.value.trim();
     if (key) {

@@ -861,22 +861,24 @@ async function fetchChannelRSS(channel) {
   // Public YouTube RSS Feed URL
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
 
-  // CORS Proxies (primary + fallbacks) with timeout
+  // CORS Proxies - ordered by reliability (corsproxy.io verified working)
   const proxyConfigs = [
-    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, type: 'json' },
     { url: `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`, type: 'text' },
     { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rssUrl)}`, type: 'text' },
-    { url: `https://thingproxy.freeboard.io/fetch/${rssUrl}`, type: 'text' },
-    { url: `https://cors-anywhere.herokuapp.com/${rssUrl}`, type: 'text' }
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, type: 'json' },
+    { url: `https://thingproxy.freeboard.io/fetch/${rssUrl}`, type: 'text' }
   ];
 
   for (const proxy of proxyConfigs) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout (was 10s)
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
 
       const res = await fetch(proxy.url, { signal: controller.signal, cache: 'no-store' });
       clearTimeout(timeoutId);
+
+      // Fail fast on non-OK status
+      if (!res.ok) continue;
 
       let xmlText;
       if (proxy.type === 'json') {

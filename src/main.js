@@ -364,20 +364,14 @@ function init() {
   updateProfileUI(); // This also renders channel nav
   renderChannelList();
 
-  updateProfileUI(); // This also renders channel nav
-  renderChannelList();
-
   // Always attempt to fetch videos (API or RSS)
-  // Check if we need to force refreshing cache due to channel changes?
-  // For now, let fetchAllVideos handle cache validation.
   fetchAllVideos();
-  // Stats upload moved to after Drive sync to ensure correct channel data
-
 
   setupEventListeners();
   updateLanguageUI(); // Initialize language
-  // Auto-fetch missing icons from community stats or YouTube API
-  setTimeout(fetchMissingChannelIcons, 1500);
+
+  // Auto-fetch missing icons immediately
+  fetchMissingChannelIcons();
 
   // Show onboarding tooltip for new users
   showOnboardingTooltip();
@@ -901,7 +895,7 @@ function getSortedVideos(videos) {
 async function fetchMissingChannelIcons() {
   const profile = getCurrentProfile();
   // Find channels without thumbnails
-  const missingIcons = profile.channels.filter(c => !c.thumbnail);
+  let missingIcons = profile.channels.filter(c => !c.thumbnail);
   if (missingIcons.length === 0) return;
 
   // Option 1: Official YouTube API (if key exists)
@@ -928,26 +922,58 @@ async function fetchMissingChannelIcons() {
     }
   }
 
-  // Option 2: Ranking API Fallback (Works for Lite Mode)
-  else {
+  // Recheck what's still missing
+  missingIcons = profile.channels.filter(c => !c.thumbnail);
+  if (missingIcons.length === 0) return;
+
+  // Option 2: Ranking API Fallback
+  try {
     console.log(`Fetching icons via Community Stats for ${missingIcons.length} channels...`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(STATS_ENDPOINT + '?action=getRankings', { signal: controller.signal });
+    clearTimeout(timeoutId);
+    const data = await response.json();
+    if (data.channels) {
+      let updated = false;
+      missingIcons.forEach(missing => {
+        const match = data.channels.find(rank => rank.id === missing.id);
+        if (match && match.thumbnail) {
+          missing.thumbnail = match.thumbnail;
+          updated = true;
+        }
+      });
+      if (updated) finalizeIconUpdate();
+    }
+  } catch (e) {
+    console.warn('Community Stats icon fetch failed', e);
+  }
+
+  // Recheck what's still missing
+  missingIcons = profile.channels.filter(c => !c.thumbnail);
+  if (missingIcons.length === 0) return;
+
+  // Option 3: Scrape YouTube channel page for og:image via CORS proxy
+  console.log(`Scraping YouTube pages for ${missingIcons.length} channel icons...`);
+  for (const channel of missingIcons) {
     try {
-      // We can use the existing Rankings list to look for matches
-      const response = await fetch(STATS_ENDPOINT + '?action=getRankings');
-      const data = await response.json();
-      if (data.channels) {
-        let updated = false;
-        missingIcons.forEach(missing => {
-          const match = data.channels.find(rank => rank.id === missing.id);
-          if (match && match.thumbnail) {
-            missing.thumbnail = match.thumbnail;
-            updated = true;
-          }
-        });
-        if (updated) finalizeIconUpdate();
+      const pageUrl = `https://www.youtube.com/channel/${channel.id}`;
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(proxyUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      const data = await res.json();
+      if (data.contents) {
+        // Extract og:image from HTML
+        const match = data.contents.match(/<meta\s+property="og:image"\s+content="([^"]+)"/);
+        if (match && match[1]) {
+          channel.thumbnail = match[1];
+          finalizeIconUpdate();
+        }
       }
     } catch (e) {
-      console.warn('Community Stats icon fetch failed', e);
+      console.warn(`Page scrape failed for ${channel.name}`, e);
     }
   }
 }

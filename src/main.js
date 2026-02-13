@@ -997,7 +997,8 @@ function setupEventListeners() {
   if (loginBtn) {
     loginBtn.onclick = () => {
       if (state.tokenClient) {
-        state.tokenClient.requestAccessToken();
+        // Force consent prompt to ensure permissions are granted
+        state.tokenClient.requestAccessToken({ prompt: 'consent' });
       } else {
         // Should not happen if configured correctly in code
         alert('OAuth Client ID not configured.');

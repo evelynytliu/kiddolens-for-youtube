@@ -129,7 +129,7 @@ const DEFAULT_DATA = {
       name: 'Default Child',
       channels: [
         { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes' },
-        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs' },
+        { id: 'UCLsooMJoIpl_7ux2jvdPB-Q', name: 'Super Simple Songs - Kids Songs' },
         { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark' }
       ]
     }
@@ -955,7 +955,7 @@ async function fetchMissingChannelIcons() {
   try {
     console.log(`Fetching icons via Google Sheet (Rankings) for ${missingIcons.length} channels...`);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for script
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
     // Append timestamp to avoid caching
     const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now(), { signal: controller.signal });
@@ -965,18 +965,8 @@ async function fetchMissingChannelIcons() {
     if (data.channels) {
       let updated = false;
       missingIcons.forEach(missing => {
-        // Try exact ID match first
-        let match = data.channels.find(rank => rank.id === missing.id);
-
-        // If not found, try exact name match
-        if (!match) {
-          match = data.channels.find(rank => rank.name === missing.name);
-        }
-
-        // If still not found, try fuzzy text match (for cases like "Super Simple Songs - Kids Songs")
-        if (!match) {
-          match = data.channels.find(rank => rank.name && (rank.name.includes(missing.name) || missing.name.includes(rank.name)));
-        }
+        // Strict ID Match Only (User Request)
+        const match = data.channels.find(rank => rank.id === missing.id);
 
         if (match && match.thumbnail) {
           console.log(`Found icon for ${missing.name}: ${match.thumbnail}`);

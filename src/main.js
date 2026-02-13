@@ -211,8 +211,8 @@ function updateLanguageUI() {
   // videoCount.textContent is updated in renderVideos
 
   // Modal
-  const settingsTitle = document.getElementById('settings-title');
-  if (settingsTitle) settingsTitle.textContent = t('parent_settings');
+  const settingsTitleText = document.getElementById('settings-title-text');
+  if (settingsTitleText) settingsTitleText.textContent = t('parent_settings');
 
   // Google Sync
   const googleSyncTitle = document.getElementById('google-sync-title');
@@ -1527,7 +1527,34 @@ function setupEventListeners() {
   document.getElementById('close-settings').onclick = () => {
     settingsModal.classList.add('hidden');
     searchResultsDropdown.classList.add('hidden');
-  }
+  };
+
+  // UX: Close Modal on Overlay Click
+  settingsModal.onclick = (e) => {
+    if (e.target === settingsModal) {
+      settingsModal.classList.add('hidden');
+      searchResultsDropdown.classList.add('hidden');
+    }
+  };
+
+  // UX: Close Modal on Escape Key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!settingsModal.classList.contains('hidden')) {
+        settingsModal.classList.add('hidden');
+        searchResultsDropdown.classList.add('hidden');
+      }
+      if (!gateModal.classList.contains('hidden')) {
+        gateModal.classList.add('hidden');
+      }
+      if (!playerModal.classList.contains('hidden')) {
+        // Player modal might need special cleanup if playing
+        playerModal.classList.add('hidden');
+        const player = document.getElementById('player-iframe');
+        if (player) player.src = '';
+      }
+    }
+  });
 
   // Stats Toggle Listener
   const shareStatsCb = document.getElementById('share-stats-checkbox');

@@ -600,35 +600,50 @@ h1 {
   color: var(--dark-color);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  /* Reduced gap for SVG */
 }
 
-#settings-title::before {
-  content: '⚙️';
-  font-size: 1.4rem;
+.settings-gear-icon {
+  color: var(--dark-color);
+  opacity: 0.8;
 }
 
 /* Close Button Redesign */
 .close-btn-corner {
-  background: rgba(0, 0, 0, 0.05);
+  background: white;
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  top: 20px;
-  right: 20px;
+  position: absolute;
+  top: -12px;
+  right: -12px;
   font-size: 1.1rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
-  color: #555;
-  border: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  color: #666;
+  border: 1px solid #eee;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  z-index: 100;
+  cursor: pointer;
+}
+
+.close-btn-corner svg {
+  transition: transform 0.2s;
 }
 
 .close-btn-corner:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: white;
+  color: #ff4757;
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+  border-color: #ffdce0;
+}
+
+.close-btn-corner:hover svg {
   transform: rotate(90deg);
-  color: var(--primary-color);
 }
 
 /* Sections Container */

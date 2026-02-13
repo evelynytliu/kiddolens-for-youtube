@@ -122,9 +122,33 @@
     <div id="settings-modal" class="modal-overlay hidden">
       <div class="modal-content glass">
         <button id="close-settings" class="close-btn-corner">✖</button>
-        <h2>Parent Settings</h2>
+        <div class="modal-header">
+          <h2 id="settings-title">Parent Settings</h2>
+          <div class="lang-switcher">
+            <button class="lang-btn" data-lang="zh">中</button>
+            <button class="lang-btn" data-lang="en">EN</button>
+          </div>
+        </div>
 
         <div class="settings-body">
+          <section class="settings-section">
+            <h3 id="google-sync-title">Google Sync</h3>
+            <p class="small-text">Back up your settings to Google Drive.</p>
+
+            <div id="google-user-info" class="user-info-display hidden"
+              style="display: none; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 8px;">
+              <img id="google-avatar" src="" alt="Avatar" style="width: 32px; height: 32px; border-radius: 50%;" />
+              <div style="display: flex; flex-direction: column;">
+                <span id="google-name" style="font-weight: 600; font-size: 0.95rem;"></span>
+                <span id="google-email" style="font-size: 0.8rem; color: #666;"></span>
+              </div>
+            </div>
+
+            <button id="google-login-btn" class="secondary-btn" style="display:none; margin-top: 10px; width: 100%;">
+              Login with Google to Sync
+            </button>
+          </section>
+
           <section class="settings-section">
             <h3>Who is watching?</h3>
             <div id="profile-list-container" class="profile-list">
@@ -187,29 +211,33 @@
                 <input type="password" id="api-key-input" placeholder="Paste your API Key here..." autocomplete="off" />
                 <button id="toggle-api-visibility" class="toggle-visibility-btn" title="Show/Hide">👁️</button>
               </div>
-              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-link">
+              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-link"
+                id="get-free-key-link">
                 Get a free Key from Google ↗
               </a>
               <button type="button" id="toggle-api-help" class="help-toggle-btn">How to get Key? ❓</button>
 
               <div id="api-help-content" class="api-help-content hidden">
-                <strong>Steps to get API Key:</strong>
+                <strong id="api-help-title">Steps to get API Key:</strong>
                 <ol>
-                  <li>Go to <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a>.</li>
-                  <li>Create a <strong>New Project</strong>.</li>
-                  <li>Search for <strong>"YouTube Data API v3"</strong> and enable it.</li>
-                  <li>Go to <strong>Credentials</strong> → <strong>Create Credentials</strong> → <strong>API
+                  <li id="api-help-step1">Go to <a href="https://console.cloud.google.com/" target="_blank">Google Cloud
+                      Console</a>.</li>
+                  <li id="api-help-step2">Create a <strong>New Project</strong>.</li>
+                  <li id="api-help-step3">Search for <strong>"YouTube Data API v3"</strong> and enable it.</li>
+                  <li id="api-help-step4">Go to <strong>Credentials</strong> → <strong>Create Credentials</strong> →
+                    <strong>API
                       Key</strong>.</li>
-                  <li>Copy the key and paste it here!</li>
+                  <li id="api-help-step5">Copy the key and paste it here!</li>
                 </ol>
                 <a href="https://developers.google.com/youtube/v3/getting-started" target="_blank"
-                  style="font-size:0.8rem; display:block; margin-top:5px;">Full Tutorial ↗</a>
+                  id="full-tutorial-link" style="font-size:0.8rem; display:block; margin-top:5px;">Full Tutorial ↗</a>
               </div>
 
               <p class="small-text"
                 style="color: #d63031; background: #fff5f5; padding: 8px; border-radius: 6px; margin-top: 10px;">
-                🔒 <strong>Security Note:</strong> Your API Key is stored ONLY on this device. If you switch devices,
-                you will need to enter it again.
+                🔒 <strong id="security-note-title">Security Note:</strong> <span id="security-note-text">Your API Key
+                  is stored ONLY on this device. If you switch devices,
+                  you will need to enter it again.</span>
               </p>
             </div>
 
@@ -248,25 +276,6 @@
             <p class="small-text" style="margin-top: 5px; color: #666;">
               Help the community discover safe channels! We only share channel names (no personal data).
             </p>
-          </section>
-
-
-          <section class="settings-section">
-            <h3>Google Sync</h3>
-            <p class="small-text">Back up your settings to Google Drive.</p>
-
-            <div id="google-user-info" class="user-info-display hidden"
-              style="display: none; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 8px;">
-              <img id="google-avatar" src="" alt="Avatar" style="width: 32px; height: 32px; border-radius: 50%;" />
-              <div style="display: flex; flex-direction: column;">
-                <span id="google-name" style="font-weight: 600; font-size: 0.95rem;"></span>
-                <span id="google-email" style="font-size: 0.8rem; color: #666;"></span>
-              </div>
-            </div>
-
-            <button id="google-login-btn" class="secondary-btn" style="display:none; margin-top: 10px; width: 100%;">
-              Login with Google to Sync
-            </button>
           </section>
         </div>
       </div>

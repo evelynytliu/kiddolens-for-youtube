@@ -8,6 +8,9 @@ const STORAGE_KEY_STATS = 'safetube_stats_meta';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const STATS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyryKTFoTom_fhoJ6ImvnfbYUn8wtKABPvMMLX_g3OP7yiBLj14m2kL0EDEOJVKDjtA6g/exec';
 
+import { translations } from './i18n.js';
+const STORAGE_KEY_LANG = 'safetube_lang';
+
 // ...
 
 async function saveToDrive() {
@@ -64,7 +67,7 @@ async function saveToDrive() {
     const apiStatus = document.getElementById('api-status');
     if (apiStatus && apiStatus.classList.contains('show')) {
       // Append cloud icon to existing toast if it's showing
-      apiStatus.textContent += ' (☁️ Synced)';
+      apiStatus.textContent += t('save_drive_success');
     }
 
   } catch (e) {
@@ -80,7 +83,7 @@ async function saveToDrive() {
         loginBtn.disabled = false;
       }
     } else {
-      console.warn('Cloud Save Failed: ' + e.message);
+      console.warn(t('save_drive_failed', { message: e.message }));
     }
   }
 }
@@ -169,8 +172,123 @@ let state = {
   data: DEFAULT_DATA,
   videos: [],
   tokenClient: null,
-  accessToken: null
+  accessToken: null,
+  lang: localStorage.getItem(STORAGE_KEY_LANG) || 'en'
 };
+
+// --- i18n Logic ---
+function t(key, variables = {}) {
+  const transObj = translations[key];
+  let text = key;
+  if (transObj) {
+    text = transObj[state.lang] || transObj['en'] || key;
+  }
+
+  Object.keys(variables).forEach(varKey => {
+    text = text.replace(`{${varKey}}`, variables[varKey]);
+  });
+  return text;
+}
+
+function setLanguage(lang) {
+  state.lang = lang;
+  localStorage.setItem(STORAGE_KEY_LANG, lang);
+  updateLanguageUI();
+}
+
+function updateLanguageUI() {
+  // Update static elements in index.html
+  // Header
+  document.querySelector('.logo-text').textContent = t('app_title');
+  document.getElementById('refresh-btn').title = t('refresh_videos');
+  document.getElementById('settings-btn').title = t('parent_settings');
+
+  // Toolbar
+  const label = document.getElementById('active-channel-display');
+  if (label && !state.activeChannelId) {
+    label.textContent = t('all_videos');
+  }
+  // videoCount.textContent is updated in renderVideos
+
+  // Modal
+  const settingsTitle = document.getElementById('settings-title');
+  if (settingsTitle) settingsTitle.textContent = t('parent_settings');
+
+  // Google Sync
+  const googleSyncTitle = document.getElementById('google-sync-title');
+  if (googleSyncTitle) googleSyncTitle.textContent = t('google_sync');
+
+  document.querySelector('.settings-section .small-text').textContent = t('sync_desc');
+  const loginBtn = document.getElementById('google-login-btn');
+  if (loginBtn && !state.accessToken) loginBtn.textContent = t('login_google');
+  else if (loginBtn && state.accessToken) loginBtn.textContent = t('sync_now');
+
+  // Who is watching
+  const sections = document.querySelectorAll('.settings-section');
+  sections[1].querySelector('h3').textContent = t('who_is_watching');
+  document.getElementById('new-profile-name').placeholder = t('add_child_placeholder');
+
+  // Manage Channels
+  sections[2].querySelector('h3').textContent = t('manage_channels');
+  document.getElementById('channel-search-input').placeholder = t('search_channels_placeholder');
+  sections[2].querySelector('.small-text').textContent = t('tip_channel_id');
+
+  // Connection Mode
+  sections[3].querySelector('h3').textContent = t('connection_mode');
+  document.getElementById('mode-lite').innerHTML = `<span class="mode-icon">🎈</span> ${t('lite_mode')}`;
+  document.getElementById('mode-pro').innerHTML = `<span class="mode-icon">🚀</span> ${t('pro_mode')}`;
+
+  // Update Mode Desc Box (based on current mode)
+  const isLite = document.getElementById('mode-lite').classList.contains('active');
+  document.getElementById('mode-title-text').textContent = isLite ? t('lite_mode_title') : t('pro_mode_title');
+  document.getElementById('mode-desc-text').textContent = isLite ? t('lite_mode_desc') : t('pro_mode_desc');
+
+  // API Section Labels & Help
+  document.querySelector('#api-section label').textContent = t('api_key_label');
+  document.getElementById('api-key-input').placeholder = t('api_key_placeholder');
+  document.getElementById('get-free-key-link').textContent = t('get_free_key');
+  document.getElementById('toggle-api-help').textContent = t('how_to_get_key');
+  document.getElementById('save-api-key').textContent = t('save_settings');
+
+  // API Help Content
+  document.getElementById('api-help-title').textContent = t('api_help_title');
+  document.getElementById('api-help-step1').firstChild.textContent = t('api_help_step1'); // Preserve link
+  document.getElementById('api-help-step2').textContent = t('api_help_step2');
+  document.getElementById('api-help-step3').textContent = t('api_help_step3');
+  document.getElementById('api-help-step4').textContent = t('api_help_step4');
+  document.getElementById('api-help-step5').textContent = t('api_help_step5');
+  document.getElementById('full-tutorial-link').textContent = t('full_tutorial');
+
+  // Security Note
+  document.getElementById('security-note-title').textContent = t('security_note_title');
+  document.getElementById('security-note-text').textContent = t('security_note_text');
+
+  // Content Preferences
+  sections[4].querySelector('h3').textContent = t('content_preferences');
+  sections[4].querySelector('span').textContent = t('filter_shorts');
+  sections[4].querySelector('.small-text').innerHTML = `
+    <strong>${t('lite_mode')}:</strong> ${t('lite_filter_desc')}<br>
+    <strong>${t('pro_mode')}:</strong> ${t('pro_filter_desc')}
+  `;
+
+  // Participate in Ranking
+  sections[5].querySelector('span').textContent = t('participate_ranking');
+  sections[5].querySelector('.small-text').textContent = t('ranking_desc');
+
+  // Gate Modal
+  document.querySelector('#gate-modal h3').textContent = t('parents_only');
+  document.getElementById('gate-submit').textContent = t('unlock');
+
+  // Update active state of buttons
+  document.querySelectorAll('.lang-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.lang === state.lang);
+  });
+
+  // Re-render dynamic content
+  renderVideos();
+  renderChannelList();
+  updateProfileUI();
+}
 
 // DOM Elements
 const videoContainer = document.getElementById('video-container');
@@ -257,6 +375,7 @@ function init() {
 
 
   setupEventListeners();
+  updateLanguageUI(); // Initialize language
   // Auto-fetch missing icons from community stats or YouTube API
   setTimeout(fetchMissingChannelIcons, 1500);
 }
@@ -389,7 +508,7 @@ async function fetchAllVideos(forceRefresh = false) {
   if (!profile.channels || profile.channels.length === 0) {
     state.videos = [];
     renderVideos();
-    apiStatus.textContent = 'No channels in this profile.';
+    apiStatus.textContent = t('no_channels');
     return;
   }
 
@@ -424,7 +543,7 @@ async function fetchAllVideos(forceRefresh = false) {
           renderChannelNav();
           updateSortUI();
           renderVideos();
-          apiStatus.textContent = `Loaded from cache (${Math.round(age / 60000)}m ago).`;
+          apiStatus.textContent = t('loaded_from_cache', { age: Math.round(age / 60000) });
           apiStatus.style.color = '#4ecdc4';
           return;
         } else if (videos.length > 0) {
@@ -439,7 +558,7 @@ async function fetchAllVideos(forceRefresh = false) {
   videoContainer.innerHTML = `
     <div class="loading-state">
       <div class="spinner"></div>
-      <p>Loading ${profile.name}'s videos...</p>
+      <p>${t('loading_videos', { name: profile.name })}</p>
     </div>
   `;
 
@@ -453,7 +572,7 @@ async function fetchAllVideos(forceRefresh = false) {
       const results = await Promise.all(promises);
       checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
-      apiStatus.textContent = 'Lite Mode (Free): Shows recent 15 videos only.';
+      apiStatus.textContent = t('status_lite_mode');
       apiStatus.style.color = '#FFA500'; // Warning Orange
 
     } else {
@@ -463,7 +582,7 @@ async function fetchAllVideos(forceRefresh = false) {
       const results = await Promise.all(promises);
       checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
-      apiStatus.textContent = 'Updated now (API Mode).';
+      apiStatus.textContent = t('status_updated');
       apiStatus.style.color = '#4ecdc4';
 
       fetchMissingChannelIcons(); // Only in Full API Mode
@@ -931,10 +1050,10 @@ function renderChannelNav() {
   // "All" Button
   const allBtn = document.createElement('div');
   allBtn.className = `nav-item ${state.activeChannelId === null ? 'active' : ''}`;
-  allBtn.title = "All Videos"; // Tooltip
+  allBtn.title = t('all_videos'); // Tooltip
   allBtn.innerHTML = `
         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-        <span>All</span>
+        <span>${t('all_videos')}</span>
     `;
   allBtn.onclick = () => filterVideos(null);
   channelNav.appendChild(allBtn);
@@ -1067,7 +1186,7 @@ function renderProfileList() {
 
                 <div class="profile-actions" style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
                     ${p.id === state.data.currentProfileId
-        ? '<span class="status-badge active" style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:0.75rem; font-weight:600;">Current</span>'
+        ? `<span class="status-badge active" style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:0.75rem; font-weight:600;">${t('current_badge')}</span>`
         : ''
       }
                     <button class="btn-icon btn-edit" data-id="${p.id}" title="Rename">✏️</button>
@@ -1119,14 +1238,14 @@ function renderVideos() {
 
   // Update Count
   if (videoCount) {
-    videoCount.textContent = `${displayVideos.length} videos`;
+    videoCount.textContent = t('video_count', { count: displayVideos.length });
   }
 
   if (displayVideos.length === 0) {
     if (state.activeChannelId) {
-      videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found for this channel.</p>';
+      videoContainer.innerHTML = `<p style="text-align:center; width: 100%;">${t('no_videos_channel')}</p>`;
     } else {
-      videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found. Check settings.</p>';
+      videoContainer.innerHTML = `<p style="text-align:center; width: 100%;">${t('no_videos_found')}</p>`;
     }
     return;
   }
@@ -1158,16 +1277,63 @@ function renderChannelList() {
   profile.channels.forEach((channel, index) => {
     const li = document.createElement('li');
     li.className = 'channel-item';
+    li.draggable = true;
+    li.dataset.index = index;
+
+    // Drag Events
+    li.ondragstart = (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', index);
+      li.classList.add('dragging');
+    };
+    li.ondragend = () => {
+      li.classList.remove('dragging');
+      document.querySelectorAll('.channel-item').forEach(item => item.classList.remove('drag-over'));
+    };
+    li.ondragover = (e) => {
+      e.preventDefault();
+      li.classList.add('drag-over');
+    };
+    li.ondragleave = () => {
+      li.classList.remove('drag-over');
+    };
+    li.ondrop = (e) => {
+      e.preventDefault();
+      const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+      const toIndex = index;
+
+      if (fromIndex !== toIndex) {
+        // Reorder Array
+        const movedItem = profile.channels.splice(fromIndex, 1)[0];
+        profile.channels.splice(toIndex, 0, movedItem);
+
+        saveLocalData();
+        renderChannelList();
+        renderChannelNav();
+      }
+    };
+
     li.innerHTML = `
-      <span>${channel.name || channel.id}</span>
-      <button class="remove-btn" data-index="${index}">Remove</button>
+      <div class="channel-item-content">
+        <span class="drag-handle">⣿</span>
+        <span class="channel-name">${channel.name || channel.id}</span>
+      </div>
+      <button class="remove-btn" data-index="${index}" title="${t('remove_channel')}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>
+      </button>
     `;
     channelList.appendChild(li);
   });
 
   document.querySelectorAll('.remove-btn').forEach(btn => {
     btn.onclick = (e) => {
-      const idx = e.target.getAttribute('data-index');
+      e.stopPropagation();
+      const idx = btn.closest('.remove-btn').getAttribute('data-index');
       profile.channels.splice(idx, 1);
       saveLocalData();
       renderChannelList();
@@ -1223,7 +1389,7 @@ function editProfileName(id) {
   const profile = state.data.profiles.find(p => p.id === id);
   if (!profile) return;
 
-  const newName = prompt("Enter new name for " + profile.name, profile.name);
+  const newName = prompt(t('rename_prompt', { name: profile.name }), profile.name);
   if (newName && newName.trim() !== "") {
     profile.name = newName.trim();
     saveLocalData();
@@ -1235,7 +1401,7 @@ function editProfileName(id) {
 }
 
 function deleteProfile(id) {
-  if (confirm('Are you sure you want to delete this profile?')) {
+  if (confirm(t('confirm_delete_profile'))) {
     state.data.profiles = state.data.profiles.filter(p => p.id !== id);
     // If deleted current, switch to first available
     if (state.data.currentProfileId === id) {
@@ -1310,6 +1476,14 @@ async function checkAndUploadStats(force = false) {
 // --- Event Listeners ---
 function setupEventListeners() {
   document.getElementById('refresh-btn').onclick = fetchAllVideos;
+
+  // Language Switcher
+  document.querySelectorAll('.lang-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      setLanguage(btn.dataset.lang);
+    };
+  });
 
   // Header Profile Switcher Dropdown Toggle
   profileSelector.onclick = (e) => {
@@ -1398,16 +1572,16 @@ function setupEventListeners() {
       apiSection.classList.add('visible');
 
       modeDescBox.classList.remove('lite');
-      modeTitle.textContent = 'Advanced Control';
-      modeDesc.textContent = 'Unlocks Search, unlimited history, & faster sync. Requires API Key.';
+      modeTitle.textContent = t('pro_mode_title');
+      modeDesc.textContent = t('pro_mode_desc');
     } else {
       modePro.classList.remove('active');
       modeLite.classList.add('active');
       apiSection.classList.remove('visible');
 
       modeDescBox.classList.add('lite');
-      modeTitle.textContent = 'Free & Simple';
-      modeDesc.textContent = 'Shows latest 15 videos. No setup required. Perfect for casual viewing.';
+      modeTitle.textContent = t('lite_mode_title');
+      modeDesc.textContent = t('lite_mode_desc');
     }
   }
 
@@ -1454,7 +1628,7 @@ function setupEventListeners() {
       state.data.apiKey = '';
       saveLocalData();
 
-      apiStatus.textContent = '🎈 Lite Mode Active!';
+      apiStatus.textContent = t('status_lite_active');
       apiStatus.classList.add('success', 'show');
 
       searchResultsDropdown.classList.add('hidden'); // Clear search
@@ -1464,7 +1638,7 @@ function setupEventListeners() {
       // Saving Pro Mode
       const key = apiKeyInput.value.trim();
       if (!key) {
-        apiStatus.textContent = '⚠️ Please enter an API Key for Pro Mode';
+        apiStatus.textContent = t('status_pro_warning');
         apiStatus.classList.add('warning', 'show');
         apiKeyInput.focus();
         return;
@@ -1473,7 +1647,7 @@ function setupEventListeners() {
       state.data.apiKey = key;
       saveLocalData();
 
-      apiStatus.textContent = '🚀 Pro Mode Activated!';
+      apiStatus.textContent = t('status_pro_active');
       apiStatus.classList.add('success', 'show');
       fetchAllVideos(true);
     }

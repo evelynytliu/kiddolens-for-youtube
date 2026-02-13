@@ -584,20 +584,26 @@ h1 {
 }
 
 /* Modal Header */
-.modal-content h2 {
+.modal-header {
   background: linear-gradient(135deg, #fcefee 0%, #fff 100%);
-  margin: 0;
   padding: 24px 28px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-content h2 {
+  margin: 0;
   font-size: 1.5rem;
   font-weight: 800;
   color: var(--dark-color);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.modal-content h2::before {
+#settings-title::before {
   content: '⚙️';
   font-size: 1.4rem;
 }
@@ -706,6 +712,35 @@ input:focus {
 .secondary-btn:hover {
   background: #e2e8f0;
   color: #2d3748;
+}
+
+/* Language Switcher */
+.lang-switcher {
+  display: flex;
+  gap: 6px;
+}
+
+.lang-btn {
+  background: #f1f3f5;
+  border: 1px solid #dee2e6;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #495057;
+  transition: all 0.2s;
+}
+
+.lang-btn:hover {
+  background: #e9ecef;
+  border-color: #adb5bd;
+}
+
+.lang-btn.active {
+  background: var(--dark-color);
+  color: white;
+  border-color: var(--dark-color);
 }
 
 /* Toggles & Checkboxes */
@@ -850,18 +885,73 @@ input[type="checkbox"] {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.5rem;
-  background: rgba(255, 255, 255, 0.5);
-  margin-bottom: 0.5rem;
-  border-radius: 6px;
+  padding: 0.8rem 1rem;
+  background: #f8f9fa;
+  margin-bottom: 0.8rem;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+  cursor: grab;
+}
+
+.channel-item:hover {
+  background: #f0f2f5;
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.channel-item:active {
+  cursor: grabbing;
+}
+
+.channel-item.dragging {
+  opacity: 0.4;
+  background: #e9ecef;
+  border: 2px dashed #adb5bd;
+}
+
+.channel-item.drag-over {
+  border-top-color: var(--primary-color);
+  background: #fff5f5;
+}
+
+.channel-item-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.drag-handle {
+  color: #ccc;
+  font-size: 1.2rem;
+  cursor: grab;
+  user-select: none;
+}
+
+.channel-name {
+  font-weight: 600;
+  color: #495057;
+  font-size: 0.95rem;
 }
 
 .remove-btn {
-  color: #ff4757;
-  background: none;
+  color: #adb5bd;
+  background: transparent;
   border: none;
   cursor: pointer;
-  font-weight: bold;
+  padding: 8px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.remove-btn:hover {
+  background: #fff5f5;
+  color: #ff4757;
+  transform: scale(1.1);
 }
 
 /* Loading Spinner */

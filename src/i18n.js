@@ -64,5 +64,9 @@ export const translations = {
     confirm_delete_profile: { en: "Are you sure you want to delete this profile?", zh: "您確定要刪除此個人檔案嗎？" },
     rename_prompt: { en: "Enter new name for {name}", zh: "輸入 {name} 的新名稱" },
     current_badge: { en: "Current", zh: "目前" },
-    remove_channel: { en: "Remove Channel", zh: "移除頻道" }
+    remove_channel: { en: "Remove Channel", zh: "移除頻道" },
+    onboarding_title: { en: "👋 Welcome to SafeTube Kids!", zh: "👋 歡迎使用 SafeTube Kids！" },
+    onboarding_text: { en: "Tap the ⚙️ settings icon to set up your child's name and add their favourite channels.", zh: "點擊 ⚙️ 設定圖示來設定孩子的名字和新增喜愛的頻道。" },
+    onboarding_btn: { en: "Go to Settings", zh: "前往設定" },
+    onboarding_dismiss: { en: "Got it!", zh: "知道了！" }
 };

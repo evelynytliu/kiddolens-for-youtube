@@ -128,9 +128,9 @@ const DEFAULT_DATA = {
       id: DEFAULT_PROFILE_ID,
       name: 'Default Child',
       channels: [
-        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLRbdv3Di8paQyrgMF_VwFXPkhwVzcW59Vgo8dTsyw=s128-c-k-c0x00ffffff-no-rj' },
-        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLSGzJceA7O2jO7C7HHaQv5y5U-y7Sg_rQe6kX5G=s128-c-k-c0x00ffffff-no-rj' },
-        { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLTkv3M_k-hSj5uV8t3y6jF_5_k_j5_k_j5_k=s128-c-k-c0x00ffffff-no-rj' }
+        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes' },
+        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs' },
+        { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark' }
       ]
     }
   ],
@@ -378,6 +378,57 @@ function init() {
   updateLanguageUI(); // Initialize language
   // Auto-fetch missing icons from community stats or YouTube API
   setTimeout(fetchMissingChannelIcons, 1500);
+
+  // Show onboarding tooltip for new users
+  showOnboardingTooltip();
+}
+
+function showOnboardingTooltip() {
+  const dismissed = localStorage.getItem('safetube_onboarding_dismissed');
+  if (dismissed) return;
+
+  // Check if this looks like a new/default setup
+  const profile = getCurrentProfile();
+  const isDefault = profile.name === 'Default Child' || (profile.channels.length <= 3 && !state.data.apiKey);
+  if (!isDefault) return;
+
+  // Create the tooltip element
+  const tooltip = document.createElement('div');
+  tooltip.id = 'onboarding-tooltip';
+  tooltip.innerHTML = `
+    <div class="onboarding-content">
+      <div class="onboarding-title">${t('onboarding_title')}</div>
+      <p class="onboarding-text">${t('onboarding_text')}</p>
+      <div class="onboarding-actions">
+        <button id="onboarding-go" class="onboarding-btn-primary">${t('onboarding_btn')}</button>
+        <button id="onboarding-dismiss" class="onboarding-btn-dismiss">${t('onboarding_dismiss')}</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(tooltip);
+
+  // Animate in
+  requestAnimationFrame(() => {
+    tooltip.classList.add('show');
+  });
+
+  document.getElementById('onboarding-go').onclick = () => {
+    dismissOnboarding(tooltip);
+    settingsModal.classList.remove('hidden');
+    renderChannelList();
+    updateProfileUI();
+  };
+
+  document.getElementById('onboarding-dismiss').onclick = () => {
+    dismissOnboarding(tooltip);
+  };
+}
+
+function dismissOnboarding(tooltip) {
+  localStorage.setItem('safetube_onboarding_dismissed', '1');
+  tooltip.classList.remove('show');
+  setTimeout(() => tooltip.remove(), 400);
 }
 
 
@@ -634,60 +685,76 @@ async function fetchAllVideos(forceRefresh = false) {
 }
 
 // --- Lite Mode: RSS Fetcher ---
-// --- Lite Mode: RSS Fetcher ---
 async function fetchChannelRSS(channel) {
   // Public YouTube RSS Feed URL
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
-  // Use AllOrigins as CORS Proxy (JSON mode to avoid CORS on raw XML)
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`;
 
-  try {
-    const res = await fetch(proxyUrl);
-    const data = await res.json();
+  // CORS Proxies (primary + fallback)
+  const proxyUrls = [
+    `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`
+  ];
 
-    if (!data.contents) return [];
+  for (const proxyUrl of proxyUrls) {
+    try {
+      const isAllOrigins = proxyUrl.includes('allorigins');
+      const res = await fetch(proxyUrl);
 
-    // Parse XML
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(data.contents, "text/xml");
-    const entries = xmlDoc.getElementsByTagName("entry");
-
-    const videos = [];
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      // Robust tag finding for different browsers/parsers
-      const videoId = (entry.getElementsByTagName("yt:videoId")[0] || entry.getElementsByTagName("videoId")[0])?.textContent;
-      const title = (entry.getElementsByTagName("title")[0])?.textContent; // Title usually standard
-      const published = (entry.getElementsByTagName("published")[0])?.textContent;
-
-      if (videoId && title) {
-        // Filter Shorts by Title (RSS Limitation)
-        const titleLower = title.toLowerCase();
-        const isShortsKeyword = /#shorts|\[shorts\]|\(shorts\)|^shorts$| shorts$/.test(titleLower);
-
-        if (state.data.filterShorts && isShortsKeyword) {
-          continue;
-        }
-
-        // RSS doesn't give good thumbnails, so we construct standard YT thumbnail URL
-        const thumb = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
-
-        videos.push({
-          id: videoId,
-          title: title,
-          thumbnail: thumb,
-          channelTitle: channel.name, // Use our name as RSS might differ slightly
-          channelId: channel.id,
-          publishedAt: published
-        });
+      let xmlText;
+      if (isAllOrigins) {
+        const data = await res.json();
+        if (!data.contents) continue;
+        xmlText = data.contents;
+      } else {
+        xmlText = await res.text();
+        if (!xmlText || xmlText.includes('error')) continue;
       }
-    }
-    return videos;
 
-  } catch (e) {
-    console.warn(`RSS fetch failed for ${channel.name}`, e);
-    return [];
+      // Parse XML
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const entries = xmlDoc.getElementsByTagName("entry");
+
+      const videos = [];
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        // Robust tag finding for different browsers/parsers
+        const videoId = (entry.getElementsByTagName("yt:videoId")[0] || entry.getElementsByTagName("videoId")[0])?.textContent;
+        const title = (entry.getElementsByTagName("title")[0])?.textContent;
+        const published = (entry.getElementsByTagName("published")[0])?.textContent;
+
+        if (videoId && title) {
+          // Filter Shorts by Title (RSS Limitation)
+          const titleLower = title.toLowerCase();
+          const isShortsKeyword = /#shorts|\[shorts\]|\(shorts\)|^shorts$| shorts$/.test(titleLower);
+
+          if (state.data.filterShorts && isShortsKeyword) {
+            continue;
+          }
+
+          const thumb = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+
+          videos.push({
+            id: videoId,
+            title: title,
+            thumbnail: thumb,
+            channelTitle: channel.name,
+            channelId: channel.id,
+            publishedAt: published
+          });
+        }
+      }
+      return videos;
+
+    } catch (e) {
+      console.warn(`RSS proxy failed for ${channel.name}`, e);
+      continue; // Try next proxy
+    }
   }
+
+  // All proxies failed
+  console.warn(`All RSS proxies failed for ${channel.name}`);
+  return [];
 }
 
 async function fetchChannelVideos(channel) {
@@ -1070,8 +1137,10 @@ function renderChannelNav() {
       avatarSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
     }
 
+    const fallbackSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
+
     btn.innerHTML = `
-            <img src="${avatarSrc}" class="nav-pill-icon" alt="${channel.name}" />
+            <img src="${avatarSrc}" class="nav-pill-icon" alt="${channel.name}" onerror="this.onerror=null;this.src='${fallbackSrc}'" />
             <span>${channel.name}</span>
         `;
     btn.onclick = () => filterVideos(channel.id);
@@ -1088,7 +1157,7 @@ function filterVideos(channelId) {
     // Short delay for fade effect
     setTimeout(() => {
       if (channelId === null) {
-        label.textContent = "All Videos";
+        label.textContent = t('all_videos');
       } else {
         const channel = getCurrentProfile().channels.find(c => c.id === channelId);
         label.textContent = channel ? channel.name : "Unknown Channel";

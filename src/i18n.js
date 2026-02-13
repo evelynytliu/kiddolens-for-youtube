@@ -87,5 +87,10 @@ export const translations = {
     onboarding_text: { en: "Tap ⚙️ Settings to set up your child's name and channels. Add a free YouTube API Key to unlock search, unlimited history, and faster sync!", zh: "點擊 ⚙️ 設定來設定孩子的名字和頻道。輸入免費的 YouTube API 金鑰可解鎖搜尋、無限歷史紀錄和更快的同步速度！" },
     onboarding_btn: { en: "Go to Settings", zh: "前往設定" },
     onboarding_dismiss: { en: "Got it!", zh: "知道了！" },
-    status_demo_mode: { en: "Demo mode – add an API Key for full access.", zh: "展示模式 – 新增 API 金鑰以取得完整功能。" }
+    status_demo_mode: { en: "Demo mode – add an API Key for full access.", zh: "展示模式 – 新增 API 金鑰以取得完整功能。" },
+    loading_lite_mode: { en: "🌐 Loading videos (Free Mode)...", zh: "🌐 載入影片中（免費模式）..." },
+    lite_mode_hint: { en: "No API key needed! Using public feeds.", zh: "不需要 API 金鑰！使用公開資料源。" },
+    no_videos_yet: { en: "Videos are loading...", zh: "影片載入中..." },
+    lite_mode_slow_hint: { en: "Free Mode uses public feeds which may be slow. For instant loading, add a YouTube API Key in Settings ⚙️", zh: "免費模式使用公開資料源，速度可能較慢。如需即時載入，請在設定 ⚙️ 中新增 YouTube API 金鑰" },
+    logout_success: { en: "Logged out successfully.", zh: "已成功登出。" }
 };

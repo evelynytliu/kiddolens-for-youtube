@@ -711,22 +711,14 @@ async function fetchAllVideos(forceRefresh = false) {
       const { timestamp, videos } = JSON.parse(cachedData);
       const age = Date.now() - timestamp;
       if (age < CACHE_DURATION) {
-        // Filter: Only keep videos from channels that are still in our profile
         const currentChannelIds = new Set(profile.channels.map(c => c.id));
         const validVideos = videos.filter(v => currentChannelIds.has(v.channelId));
-
-        // If we have valid videos, use them. 
-        // If the cache is empty (but valid?) or we filtered something out?
-        // Actually, if we filtered out videos, the resulting list might be empty.
-        // If it's valid videos, show them.
 
         if (validVideos.length > 0) {
           console.log('Using cached videos (filtered)');
           state.videos = validVideos;
-
           state.activeChannelId = null;
           state.currentSort = 'newest';
-
           renderChannelNav();
           updateSortUI();
           renderVideos();
@@ -742,10 +734,12 @@ async function fetchAllVideos(forceRefresh = false) {
     }
   }
 
+  // 2. Show Loading UI
   videoContainer.innerHTML = `
     <div class="loading-state">
       <div class="spinner"></div>
-      <p>${t('loading_videos', { name: profile.name })}</p>
+      <p>${useLiteMode ? (t('loading_lite_mode') || '🌐 Loading videos (Free Mode)...') : t('loading_videos', { name: profile.name })}</p>
+      ${useLiteMode ? `<p class="small-text" style="color:#999; margin-top:8px;">${t('lite_mode_hint') || 'No API key needed! Using public feeds.'}</p>` : ''}
     </div>
   `;
 
@@ -753,21 +747,60 @@ async function fetchAllVideos(forceRefresh = false) {
     let checkVideos = [];
 
     if (useLiteMode) {
-      // --- Lite Mode (RSS) ---
+      // --- Lite Mode (RSS) with Progressive Rendering ---
       console.log('Fetching videos via Lite Mode (RSS)...');
-      const promises = profile.channels.map(channel => fetchChannelRSS(channel));
-      const results = await Promise.all(promises);
-      checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+      let loadedCount = 0;
+      const totalChannels = profile.channels.length;
 
-      // If RSS returned nothing (all proxies failed), show demo videos
+      // Process channels and render progressively
+      const promises = profile.channels.map(async (channel) => {
+        try {
+          const videos = await fetchChannelRSS(channel);
+          loadedCount++;
+
+          // Add to state and re-render as each channel loads
+          if (videos.length > 0) {
+            checkVideos.push(...videos);
+            checkVideos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+            state.videos = [...checkVideos];
+
+            // Progressive render
+            state.activeChannelId = null;
+            state.currentSort = 'newest';
+            renderChannelNav();
+            updateSortUI();
+            renderVideos();
+          }
+
+          apiStatus.textContent = `Loading channels... ${loadedCount}/${totalChannels}`;
+          apiStatus.style.color = '#FFA500';
+          return videos;
+        } catch (e) {
+          loadedCount++;
+          console.warn(`Failed to fetch ${channel.name}:`, e);
+          return [];
+        }
+      });
+
+      await Promise.all(promises);
+
+      // Final state
       if (checkVideos.length === 0) {
         console.warn('RSS returned no videos, falling back to demo content');
         checkVideos = MOCK_VIDEOS;
-        apiStatus.textContent = t('status_demo_mode');
+
+        videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
+            <p style="font-size: 1.2rem;">🎬</p>
+            <p style="font-weight: 600; margin: 10px 0;">${t('no_videos_yet') || 'Videos are loading...'}</p>
+            <p class="small-text" style="color: #888; max-width: 300px; margin: 0 auto;">${t('lite_mode_slow_hint') ||
+          'Free Mode uses public feeds which may be slow. For instant loading, add a YouTube API Key in Settings ⚙️'}</p>
+          </div>`;
+
+        apiStatus.textContent = t('status_demo_mode') || 'Demo Mode';
         apiStatus.style.color = '#FFA500';
       } else {
-        apiStatus.textContent = t('status_lite_mode');
-        apiStatus.style.color = '#FFA500'; // Warning Orange
+        apiStatus.textContent = `✅ ${checkVideos.length} videos loaded (Free Mode)`;
+        apiStatus.style.color = '#4ecdc4';
       }
 
     } else {
@@ -786,23 +819,18 @@ async function fetchAllVideos(forceRefresh = false) {
     state.videos = checkVideos;
 
     // Save to Cache
-    const cacheKey = `safetube_cache_${profile.id}`;
-    localStorage.setItem(cacheKey, JSON.stringify({
+    const cacheKey2 = `safetube_cache_${profile.id}`;
+    localStorage.setItem(cacheKey2, JSON.stringify({
       timestamp: Date.now(),
       videos: state.videos
     }));
 
-    // Save potentially updated channel info (uploadsId)
     if (!useLiteMode) saveLocalData();
 
-    // Reset Filter on New Fetch? Or keep?
-    // Let's reset to ALL when fetching fresh videos.
     state.activeChannelId = null;
-    state.currentSort = 'newest'; // Default
+    state.currentSort = 'newest';
 
-    state.currentSort = 'newest'; // Default
-
-    renderChannelNav(); // Re-render to clear active state if needed or ensure sync
+    renderChannelNav();
     updateSortUI();
     renderVideos();
 
@@ -812,8 +840,8 @@ async function fetchAllVideos(forceRefresh = false) {
       apiStatus.textContent = 'Error: Cannot fetch RSS feed.';
       apiStatus.style.color = '#ff6b6b';
       videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
-            <p>😕 Lite Mode failed.</p>
-            <p>Try refreshing or adding an API Key for stability.</p>
+            <p>😕 Free Mode encountered an error.</p>
+            <p class="small-text" style="margin-top: 8px;">Try refreshing, or add a YouTube API Key in Settings for better reliability.</p>
         </div>`;
     } else {
       console.error('Error fetching videos:', error);
@@ -837,15 +865,17 @@ async function fetchChannelRSS(channel) {
   const proxyConfigs = [
     { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, type: 'json' },
     { url: `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`, type: 'text' },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rssUrl)}`, type: 'text' }
+    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rssUrl)}`, type: 'text' },
+    { url: `https://thingproxy.freeboard.io/fetch/${rssUrl}`, type: 'text' },
+    { url: `https://cors-anywhere.herokuapp.com/${rssUrl}`, type: 'text' }
   ];
 
   for (const proxy of proxyConfigs) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout (was 10s)
 
-      const res = await fetch(proxy.url, { signal: controller.signal });
+      const res = await fetch(proxy.url, { signal: controller.signal, cache: 'no-store' });
       clearTimeout(timeoutId);
 
       let xmlText;

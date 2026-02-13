@@ -41,6 +41,8 @@ export const translations = {
     status_updated: { en: "Updated now (API Mode).", zh: "已更新 (專業模式)。" },
     save_drive_success: { en: " (☁️ Synced)", zh: " (☁️ 已同步)" },
     save_drive_failed: { en: "Cloud Save Failed: {message}", zh: "雲端儲存失敗：{message}" },
+    loaded_from_drive: { en: "Settings loaded from Google Drive!", zh: "已從 Google 雲端載入設定！" },
+    sync_complete: { en: "Already up to date.", zh: "資料已是最新狀態。" },
     content_preferences: { en: "Content Preferences", zh: "內容偏好" },
     filter_shorts: { en: "Filter YouTube Shorts", zh: "過濾 YouTube Shorts 短片" },
     lite_filter_desc: { en: "Lite Mode: Hides videos with '#shorts' in the title.", zh: "輕量模式：隱藏標題中包含 '#shorts' 的影片。" },

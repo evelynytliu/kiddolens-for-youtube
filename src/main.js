@@ -18,27 +18,28 @@ async function saveToDrive() {
 
   // Clean data before saving (remove large cached videos to save space/bandwidth)
   const cleanData = JSON.parse(JSON.stringify(state.data));
-  // Optional: We could strip 'channels' details here if we only want to save IDs, 
-  // but for now let's keep it simple. Smart sync is better.
-
   const configData = {
     ...cleanData,
     lastUpdated: new Date().toISOString()
   };
 
   const fileId = await findConfigFile();
-  const blob = new Blob([JSON.stringify(configData)], { type: 'application/json' });
-
-  // Metadata: Save to Root (Visible to User)
   const metadata = {
     name: 'safetube_settings.json', // New visible filename
     mimeType: 'application/json'
-    // No 'parents' means root folder
   };
 
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', blob);
+  const boundary = 'foo_bar_baz_' + Date.now();
+  const delimiter = "\r\n--" + boundary + "\r\n";
+  const close_delim = "\r\n--" + boundary + "--";
+
+  const body = delimiter +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(metadata) +
+    delimiter +
+    'Content-Type: application/json\r\n\r\n' +
+    JSON.stringify(configData) +
+    close_delim;
 
   let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
   let method = 'POST';
@@ -52,16 +53,16 @@ async function saveToDrive() {
     const res = await fetch(url, {
       method: method,
       headers: {
-        'Authorization': 'Bearer ' + state.accessToken
+        'Authorization': 'Bearer ' + state.accessToken,
+        'Content-Type': 'multipart/related; boundary=' + boundary
       },
-      body: form
+      body: body
     });
     if (!res.ok) {
       const errText = await res.text();
       throw new Error(`HTTP ${res.status}: ${errText}`);
     }
     console.log('Saved to Drive (Visible File)');
-    // alert('Cloud Save Success! Settings backed up.'); // Removed to prevent double alerts/annoyance
 
     // Optional: Update a status indicator if visible
     const apiStatus = document.getElementById('api-status');
@@ -75,10 +76,9 @@ async function saveToDrive() {
     // If permission error, suggest re-login
     if (e.message.includes('401') || e.message.includes('403')) {
       console.warn('Sync Error: Permission Denied. Token likely expired.');
-      // Don't alert on auto-save, just log. 
-      // Only reset if we are sure? Let's just invalidate for now.
       state.accessToken = null;
-      if (typeof loginBtn !== 'undefined' && loginBtn) {
+      const loginBtn = document.getElementById('google-login-btn');
+      if (loginBtn) {
         loginBtn.textContent = 'Login with Google to Sync';
         loginBtn.disabled = false;
       }
@@ -451,6 +451,7 @@ function loadLocalData() {
 }
 
 function saveLocalData() {
+  state.data.lastUpdated = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY_DATA, JSON.stringify(state.data));
   // Sync if logged in
   if (state.accessToken) saveToDrive();
@@ -513,29 +514,53 @@ function initializeGSI(clientId) {
 
 async function syncWithDrive() {
   const fileId = await findConfigFile();
-  if (fileId) {
-    const driveConfig = await downloadConfigFile(fileId);
-    if (driveConfig) {
-      // Merge logic: Drive overwrites local mostly, but we keep structure validity
-      if (driveConfig.profiles && Array.isArray(driveConfig.profiles)) {
-        state.data = driveConfig;
-        saveLocalData(); // Save to local but don't re-trigger upload
-        updateProfileUI();
-        renderChannelList();
-        // If API key exists, fetch videos AND icons
-        if (state.data.apiKey) {
-          fetchAllVideos(true); // Force refresh
-          setTimeout(fetchMissingChannelIcons, 1000); // Check icons
-        }
-        alert('Settings loaded from Google Drive!');
-      }
-    } else {
-      console.log('No config file found on Drive, creating new...');
-      await saveToDrive(); // First time sync
-    }
-  } else {
+
+  if (!fileId) {
     console.log('No config file found on Drive, creating new...');
+    await saveToDrive(); // First time sync (Upload)
+    alert(t('save_drive_success'));
+    return;
+  }
+
+  const driveConfig = await downloadConfigFile(fileId);
+  if (!driveConfig) {
+    // File exists but empty/corrupt? Try saving local.
     await saveToDrive();
+    return;
+  }
+
+  // Compare Timestamps
+  const localTime = state.data.lastUpdated ? new Date(state.data.lastUpdated).getTime() : 0;
+  const cloudTime = driveConfig.lastUpdated ? new Date(driveConfig.lastUpdated).getTime() : 0;
+
+  console.log(`Sync Check: Local (${state.data.lastUpdated}) vs Cloud (${driveConfig.lastUpdated})`);
+
+  if (localTime > cloudTime) {
+    // Local is newer: Upload
+    console.log('Local is newer, uploading to Drive...');
+    await saveToDrive();
+    alert(t('save_drive_success')); // "Saved to Drive"
+
+  } else if (cloudTime > localTime) {
+    // Cloud is newer: Download
+    console.log('Cloud is newer, downloading from Drive...');
+    if (driveConfig.profiles && Array.isArray(driveConfig.profiles)) {
+      state.data = driveConfig;
+      saveLocalData(); // Save to localStorage
+      updateProfileUI();
+      renderChannelList();
+
+      if (state.data.apiKey) {
+        fetchAllVideos(true);
+        setTimeout(fetchMissingChannelIcons, 1000);
+      }
+      alert(t('loaded_from_drive')); // "Loaded from Drive"
+    }
+
+  } else {
+    // Timestamps equal or no meaningful diff
+    console.log('Sync: Data is up to date.');
+    alert(t('sync_complete')); // New key needed
   }
 }
 

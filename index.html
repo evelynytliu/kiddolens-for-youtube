@@ -102,12 +102,14 @@
 
         <section class="settings-section">
           <h3>Who is watching?</h3>
-          <div class="add-channel-form">
-            <input type="text" id="new-profile-name" placeholder="New Child Name" />
-            <button id="add-profile-btn" class="secondary-btn">Add Child</button>
+          <div id="profile-list-container" class="profile-list">
+            <!-- Dynamic profiles -->
           </div>
-          <div id="profile-list-container">
-            <!-- List of profiles -->
+
+          <div class="add-profile-form" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #ddd;">
+            <input type="text" id="new-profile-name" placeholder="Name of new child..." />
+            <button id="add-profile-btn" class="secondary-btn" title="Add Child"
+              style="font-size: 1.2rem; line-height: 1; padding: 0 1rem;">+</button>
           </div>
         </section>
 

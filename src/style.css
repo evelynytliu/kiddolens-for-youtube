@@ -738,26 +738,70 @@ input:focus {
   font-size: 1.2rem;
 }
 
-/* Settings - Profiles */
+/* Profile List */
+.profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
 .profile-list-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem;
+  padding: 0.8rem 1rem;
   background: white;
-  border: 1px solid #eee;
-  border-radius: 8px;
-  margin-bottom: 0.5rem;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  cursor: grab;
+  /* Show grab cursor for draggable */
+  transition: all 0.2s;
+}
+
+.profile-list-item:active {
+  cursor: grabbing;
 }
 
 .profile-list-item.active {
-  border-color: var(--secondary-color);
-  background: #f0fdfd;
+  border-color: var(--primary-color);
+  background: #f0fdfc;
+  /* Very light teal */
+}
+
+.profile-list-item.dragging {
+  opacity: 0.5;
+  background: #eee;
+}
+
+.profile-list-item.drag-over {
+  border-top: 2px solid var(--primary-color);
+  transform: translateY(2px);
 }
 
 .profile-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 4px;
+  border-radius: 50%;
+  transition: background 0.2s;
+  display: flex;
+  /* Center emoji */
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.btn-icon:hover {
+  background-color: rgba(0, 0, 0, 0.05);
 }
 
 .btn-small {

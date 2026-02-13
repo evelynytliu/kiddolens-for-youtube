@@ -767,33 +767,76 @@ function renderProfileList() {
   if (!profileListContainer) return;
   profileListContainer.innerHTML = '';
 
-  state.data.profiles.forEach(p => {
+  state.data.profiles.forEach((p, index) => {
     const div = document.createElement('div');
     div.className = `profile-list-item ${p.id === state.data.currentProfileId ? 'active' : ''}`;
+    div.draggable = true; // Enable Drag
+    div.dataset.index = index;
+
+    // Drag Events
+    div.ondragstart = (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', index);
+      div.classList.add('dragging');
+    };
+    div.ondragend = () => {
+      div.classList.remove('dragging');
+      document.querySelectorAll('.profile-list-item').forEach(item => item.classList.remove('drag-over'));
+    };
+    div.ondragover = (e) => {
+      e.preventDefault();
+      div.classList.add('drag-over');
+    };
+    div.ondragleave = () => {
+      div.classList.remove('drag-over');
+    };
+    div.ondrop = (e) => {
+      e.preventDefault();
+      const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+      const toIndex = index;
+
+      if (fromIndex !== toIndex) {
+        // Reorder Array
+        const movedItem = state.data.profiles.splice(fromIndex, 1)[0];
+        state.data.profiles.splice(toIndex, 0, movedItem);
+
+        saveLocalData();
+        updateProfileUI(); // Re-render everything
+      }
+    };
 
     div.innerHTML = `
-            <span>${p.name} <small>(${p.channels.length} channels)</small></span>
-            <div class="profile-actions">
-                ${p.id === state.data.currentProfileId
-        ? '<span style="font-size:0.8rem; color:green; display:flex; align-items:center;">Active</span>'
-        : `<button class="btn-small btn-select" data-id="${p.id}">Switch</button>`
+            <div class="profile-info-row" style="display:flex; align-items:center; width:100%; gap: 10px;">
+                <span class="drag-handle" style="cursor: grab; color: #ccc; font-size: 1.2rem;">⣿</span>
+                
+                <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+                    <span style="font-weight:600; font-size:1rem;">${p.name}</span>
+                    <span style="font-size:0.8rem; color:#888;">${p.channels.length} channels</span>
+                </div>
+
+                <div class="profile-actions" style="margin-left: auto; display: flex; gap: 8px;">
+                    ${p.id === state.data.currentProfileId
+        ? '<span class="status-badge active" style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:0.8rem;">Current</span>'
+        : `<button class="btn-icon btn-select" data-id="${p.id}" title="Switch to this profile">➡️</button>`
       }
-                <button class="btn-small btn-edit" data-id="${p.id}">Edit</button>
-                ${state.data.profiles.length > 1 ? `<button class="btn-small btn-delete" data-id="${p.id}">Delete</button>` : ''}
+                    <button class="btn-icon btn-edit" data-id="${p.id}" title="Rename">✏️</button>
+                    ${state.data.profiles.length > 1 ? `<button class="btn-icon btn-delete" data-id="${p.id}" title="Delete">🗑️</button>` : ''}
+                </div>
             </div>
         `;
     profileListContainer.appendChild(div);
   });
 
-  // Attach listeners
+  // Attach listeners (Switch/Edit/Delete)
+  // Note: Drag listeners are attached per element above
   profileListContainer.querySelectorAll('.btn-select').forEach(btn => {
-    btn.onclick = () => switchProfile(btn.dataset.id);
+    btn.onclick = (e) => { e.stopPropagation(); switchProfile(btn.dataset.id); };
   });
   profileListContainer.querySelectorAll('.btn-edit').forEach(btn => {
-    btn.onclick = () => editProfileName(btn.dataset.id);
+    btn.onclick = (e) => { e.stopPropagation(); editProfileName(btn.dataset.id); };
   });
   profileListContainer.querySelectorAll('.btn-delete').forEach(btn => {
-    btn.onclick = () => deleteProfile(btn.dataset.id);
+    btn.onclick = (e) => { e.stopPropagation(); deleteProfile(btn.dataset.id); };
   });
 }
 

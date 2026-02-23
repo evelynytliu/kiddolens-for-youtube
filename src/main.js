@@ -309,6 +309,7 @@ function updateLanguageUI() {
   // Header
   document.querySelector('.logo-text').textContent = t('app_title');
   document.getElementById('refresh-btn').title = t('refresh_videos');
+  document.getElementById('history-btn').title = t('watch_history');
   document.getElementById('settings-btn').title = t('parent_settings');
 
   // Toolbar
@@ -2146,6 +2147,80 @@ function openPlayer(video) {
   }
 }
 
+// --- Watch History Panel ---
+
+function relativeTime(ts) {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1)  return t('history_just_now');
+  if (mins < 60) return t('history_minutes_ago', { n: mins });
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return t('history_hours_ago', { n: hrs });
+  return t('history_days_ago', { n: Math.floor(hrs / 24) });
+}
+
+function renderHistoryPanel() {
+  const profile = getCurrentProfile();
+  const listEl = document.getElementById('history-list');
+  const titleEl = document.getElementById('history-title-text');
+  if (titleEl) titleEl.textContent = t('watch_history');
+  const clearBtn = document.getElementById('clear-history-btn');
+  if (clearBtn) clearBtn.textContent = t('watch_history_clear');
+
+  if (!profile || !listEl) return;
+
+  const key = STORAGE_KEY_WATCH_HISTORY + profile.id;
+  const history = JSON.parse(localStorage.getItem(key) || '[]');
+
+  if (history.length === 0) {
+    listEl.innerHTML = `<p class="history-empty">${t('watch_history_empty')}</p>`;
+    return;
+  }
+
+  listEl.innerHTML = history.map(item => `
+    <div class="history-item" data-video-id="${item.videoId}"
+         data-title="${item.title?.replace(/"/g, '&quot;') || ''}"
+         data-thumbnail="${item.thumbnail || ''}"
+         data-channel-id="${item.channelId || ''}"
+         data-channel-title="${item.channelTitle?.replace(/"/g, '&quot;') || ''}">
+      <img class="history-thumb" src="${item.thumbnail || ''}" alt="" loading="lazy" />
+      <div class="history-info">
+        <div class="history-video-title">${item.title || ''}</div>
+        <div class="history-meta">
+          <span class="history-channel">${item.channelTitle || ''}</span>
+          <span class="history-time">${relativeTime(item.watchedAt)}</span>
+        </div>
+      </div>
+      <div class="history-play-icon">▶</div>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.history-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const video = {
+        id: el.dataset.videoId,
+        title: el.dataset.title,
+        thumbnail: el.dataset.thumbnail,
+        channelId: el.dataset.channelId,
+        channelTitle: el.dataset.channelTitle
+      };
+      closeHistoryPanel();
+      openPlayer(video);
+    });
+  });
+}
+
+function openHistoryPanel() {
+  renderHistoryPanel();
+  document.getElementById('history-modal').classList.remove('hidden');
+  toggleBodyScroll(true);
+}
+
+function closeHistoryPanel() {
+  document.getElementById('history-modal').classList.add('hidden');
+  toggleBodyScroll(false);
+}
+
 function showEndedOverlay(_video, player) {
   document.querySelector('.video-ended-overlay')?.remove();
 
@@ -2367,10 +2442,19 @@ function setupEventListeners() {
   document.getElementById('close-settings').onclick = closeSettings;
   document.getElementById('close-player').onclick = closePlayer;
 
+  document.getElementById('history-btn').onclick = openHistoryPanel;
+  document.getElementById('close-history').onclick = closeHistoryPanel;
+  document.getElementById('clear-history-btn').onclick = () => {
+    const profile = getCurrentProfile();
+    if (profile) localStorage.removeItem(STORAGE_KEY_WATCH_HISTORY + profile.id);
+    renderHistoryPanel();
+  };
+
   // Overlay Clicks
   settingsModal.onclick = (e) => { if (e.target === settingsModal) closeSettings(); };
   playerModal.onclick = (e) => { if (e.target === playerModal) closePlayer(); };
   gateModal.onclick = (e) => { if (e.target === gateModal) gateModal.classList.add('hidden'); toggleBodyScroll(false); };
+  document.getElementById('history-modal').onclick = (e) => { if (e.target.id === 'history-modal') closeHistoryPanel(); };
 
   // Stats Toggle Listener
   const shareStatsCb = document.getElementById('share-stats-checkbox');

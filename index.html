@@ -71,6 +71,13 @@
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
           </svg>
         </button>
+        <button id="history-btn" class="icon-btn" title="Watch History">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+        </button>
         <button id="settings-btn" class="icon-btn" title="Parent Settings">
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -336,6 +343,32 @@
             💾 Save Settings
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- Watch History Modal -->
+    <div id="history-modal" class="modal-overlay hidden">
+      <div class="modal-content glass history-modal-content">
+        <button id="close-history" class="close-btn-corner" aria-label="Close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+        <div class="modal-header">
+          <h2>
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+              style="vertical-align:middle; margin-right:8px;">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span id="history-title-text">Watch History</span>
+          </h2>
+          <button id="clear-history-btn" class="secondary-btn history-clear-btn">Clear History</button>
+        </div>
+        <div id="history-list" class="history-list"></div>
       </div>
     </div>
 

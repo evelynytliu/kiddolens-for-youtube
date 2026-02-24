@@ -2049,11 +2049,17 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 600px) {
-  .nav-add-circle { width: 54px; height: 54px; }
+  .nav-add-circle {
+    width: 54px;
+    height: 54px;
+  }
 }
 
 @media (max-width: 400px) {
-  .nav-add-circle { width: 48px; height: 48px; }
+  .nav-add-circle {
+    width: 48px;
+    height: 48px;
+  }
 }
 
 /* ================================================================
@@ -2063,7 +2069,7 @@ input[type="checkbox"] {
   max-width: 560px;
   width: 92%;
   max-height: 88vh;
-  overflow: hidden;
+  /* overflow: hidden; Removed to prevent the close button from being cut off */
   display: flex;
   flex-direction: column;
   padding: 24px;
@@ -2720,6 +2726,7 @@ button:focus-visible {
   .sync-conflict-cards {
     flex-direction: column;
   }
+
   .sync-vs {
     justify-content: center;
     padding: 4px 0;

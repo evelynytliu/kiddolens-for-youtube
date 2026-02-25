@@ -8,7 +8,7 @@
       .edge { fill: #22429e; }
       .left-petal-yellow { fill: #facd40; }
 
-      /* Intro Animation Keyframes (Run Once & Forwards) */
+      /* Intro Animation Keyframes (Run Once and Forwards) */
       .right-flip-front {
         transform-origin: 178px 50%;
         animation: animRightFront 2s cubic-bezier(0.3, 0, 0.3, 1) forwards;

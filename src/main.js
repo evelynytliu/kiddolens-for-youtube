@@ -16,8 +16,12 @@ const STORAGE_KEY_STATS = 'safetube_stats_meta';
 const STORAGE_KEY_WATCH_HISTORY = 'safetube_watch_history_'; // Per-profile: + profileId
 const INTEREST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
 const MAX_WATCH_HISTORY = 50;
-// Scopes: Drive access + User Info for display
-const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
+const STORAGE_KEY_WATCH_TIME = 'safetube_watch_time_'; // Per-profile per day: + profileId_YYYY-MM-DD
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 const STATS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyryKTFoTom_fhoJ6ImvnfbYUn8wtKABPvMMLX_g3OP7yiBLj14m2kL0EDEOJVKDjtA6g/exec';
 
 import { translations } from './i18n.js';
@@ -25,94 +29,141 @@ const STORAGE_KEY_LANG = 'safetube_lang';
 
 // ...
 
-async function saveToDrive() {
-  if (!state.accessToken) return;
-
-  // Clean data before saving (remove large cached videos to save space/bandwidth)
-  const cleanData = JSON.parse(JSON.stringify(state.data));
-  const configData = {
-    ...cleanData,
-    lastUpdated: new Date().toISOString()
-  };
-
-  const fileId = await findConfigFile();
-  const metadata = {
-    name: 'safetube_settings.json', // New visible filename
-    mimeType: 'application/json'
-  };
-
-  const boundary = 'foo_bar_baz_' + Date.now();
-  const delimiter = "\r\n--" + boundary + "\r\n";
-  const close_delim = "\r\n--" + boundary + "--";
-
-  const body = delimiter +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-    JSON.stringify(metadata) +
-    delimiter +
-    'Content-Type: application/json\r\n\r\n' +
-    JSON.stringify(configData) +
-    close_delim;
-
-  let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-  let method = 'POST';
-
-  if (fileId) {
-    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
-    method = 'PATCH';
+function ensureUUIDs() {
+  let changed = false;
+  state.data.profiles.forEach(p => {
+    // Basic UUID format check: 8-4-4-4-12
+    const isUUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(p.id);
+    if (!isUUID) {
+      const oldId = p.id;
+      p.id = crypto.randomUUID();
+      changed = true;
+      if (state.data.currentProfileId === oldId) {
+        state.data.currentProfileId = p.id;
+      }
+    }
+  });
+  if (changed) {
+    saveLocalData();
   }
+}
+
+async function saveToSupabase() {
+  if (!state.user) return;
+  ensureUUIDs(); // Ensure all profiles have valid UUIDs before inserting
 
   try {
-    const res = await fetch(url, {
-      method: method,
-      headers: {
-        'Authorization': 'Bearer ' + state.accessToken,
-        'Content-Type': 'multipart/related; boundary=' + boundary
-      },
-      body: body
+    // 1. Save user settings
+    const { error: errSettings } = await supabase.from('kiddolens_user_settings').upsert({
+      user_id: state.user.id,
+      youtube_api_key: state.data.apiKey,
+      filter_shorts: state.data.filterShorts,
+      share_stats: state.data.shareStats,
+      updated_at: new Date().toISOString()
     });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+    if (errSettings) throw errSettings;
+
+    // 2. Sync Profiles (Delete removed ones, then Upsert)
+    const { data: remoteProfiles } = await supabase.from('kiddolens_profiles').select('id');
+    const localProfileIds = state.data.profiles.map(p => p.id);
+    const profilesToDelete = (remoteProfiles || []).map(p => p.id).filter(id => !localProfileIds.includes(id));
+
+    if (profilesToDelete.length > 0) {
+      await supabase.from('kiddolens_profiles').delete().in('id', profilesToDelete);
     }
-    console.log('Saved to Drive.');
+
+    const profilesToUpsert = state.data.profiles.map(p => ({
+      id: p.id,
+      user_id: state.user.id,
+      name: p.name,
+      avatar: p.avatar || '',
+      created_at: p.created_at || new Date().toISOString()
+    }));
+    if (profilesToUpsert.length > 0) {
+      const { error: errProf } = await supabase.from('kiddolens_profiles').upsert(profilesToUpsert);
+      if (errProf) throw errProf;
+    }
+
+    // 3. Sync Channels 
+    // Delete existing channels in remote that are not in local
+    // To be safe, we'll only delete from this user's profiles
+    if (localProfileIds.length > 0) {
+      const { data: remoteChannels } = await supabase.from('kiddolens_channels').select('id, profile_id, youtube_channel_id');
+      const localChannelKeys = new Set();
+      state.data.profiles.forEach(p => {
+        p.channels.forEach(c => localChannelKeys.add(`${p.id}_${c.id}`));
+      });
+
+      const channelsToDelete = (remoteChannels || [])
+        .filter(c => localProfileIds.includes(c.profile_id))
+        .filter(c => !localChannelKeys.has(`${c.profile_id}_${c.youtube_channel_id}`))
+        .map(c => c.id);
+
+      if (channelsToDelete.length > 0) {
+        await supabase.from('kiddolens_channels').delete().in('id', channelsToDelete);
+      }
+    }
+
+    const channelsToInsert = [];
+    state.data.profiles.forEach(p => {
+      p.channels.forEach(c => {
+        channelsToInsert.push({
+          profile_id: p.id,
+          youtube_channel_id: c.id,
+          title: c.name,
+          thumbnail_url: c.thumbnail || '',
+        });
+      });
+    });
+
+    if (channelsToInsert.length > 0) {
+      const { error: errChan } = await supabase.from('kiddolens_channels').upsert(channelsToInsert, { onConflict: 'profile_id, youtube_channel_id' });
+      if (errChan) throw errChan;
+    }
+
+    console.log('Saved to Supabase.');
     state.lastSyncedAt = new Date().toISOString();
     updateLastSyncedUI();
-
   } catch (e) {
-    console.error('Save to Drive failed', e);
-    if (e.message.includes('401') || e.message.includes('403')) {
-      console.warn('Sync Error: Permission Denied. Token likely expired.');
-      state.accessToken = null;
-      updateSyncUI();
-    } else {
-      showSyncToast(t('save_drive_failed', { message: e.message }), 'warning');
+    console.error('Save to Supabase failed', e);
+    showSyncToast(t('save_drive_failed', { message: e.message }), 'warning');
+  }
+}
+
+async function downloadFromSupabase() {
+  if (!state.user) return null;
+  try {
+    const { data: settings } = await supabase.from('kiddolens_user_settings').select('*').single();
+    const { data: profiles } = await supabase.from('kiddolens_profiles').select('*');
+    const { data: channels } = await supabase.from('kiddolens_channels').select('*');
+
+    if (!settings && (!profiles || profiles.length === 0)) return null; // No data
+
+    // Build similar structure to configData
+    const configData = {
+      apiKey: settings?.youtube_api_key || '',
+      filterShorts: settings?.filter_shorts ?? true,
+      shareStats: settings?.share_stats ?? true,
+      profiles: (profiles || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        avatar: p.avatar,
+        channels: (channels || []).filter(c => c.profile_id === p.id).map(c => ({
+          id: c.youtube_channel_id,
+          name: c.title,
+          thumbnail: c.thumbnail_url
+        }))
+      })),
+      lastUpdated: settings?.updated_at || new Date().toISOString()
+    };
+
+    if (configData.profiles.length > 0) {
+      configData.currentProfileId = configData.profiles[0].id; // Assign a valid active profile
     }
-  }
-}
 
-async function findConfigFile() {
-  // Search in visible drive, explicitly for our file
-  const q = "name = 'safetube_settings.json' and trashed = false";
-  try {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}`, {
-      headers: { 'Authorization': 'Bearer ' + state.accessToken }
-    });
-    const data = await res.json();
-    return data.files && data.files.length > 0 ? data.files[0].id : null;
+    return configData;
   } catch (e) {
-    console.error('Find config failed', e);
-    return null;
-  }
-}
-
-async function downloadConfigFile(fileId) {
-  try {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-      headers: { 'Authorization': 'Bearer ' + state.accessToken }
-    });
-    return await res.json();
-  } catch (e) {
-    console.error('Download config failed', e);
+    console.error('Download from Supabase failed', e);
     return null;
   }
 }
@@ -274,8 +325,7 @@ const MOCK_VIDEOS = [
 let state = {
   data: DEFAULT_DATA,
   videos: [],
-  tokenClient: null,
-  accessToken: null,
+  user: null, // Track Supabase logged-in user
   lang: localStorage.getItem(STORAGE_KEY_LANG) || (navigator.language?.startsWith('zh') ? 'zh' : 'en'),
   channelNextPageTokens: {}, // Track pagination per channel for "Load More"
   currentSort: 'shuffle',    // Default to shuffle
@@ -337,13 +387,8 @@ function updateLanguageUI() {
   sections[1].querySelector('h3').textContent = t('who_is_watching');
   document.getElementById('new-profile-name').placeholder = t('add_child_placeholder');
 
-  // Manage Channels
-  sections[2].querySelector('h3').textContent = t('manage_channels');
-  document.getElementById('channel-search-input').placeholder = t('search_channels_placeholder');
-  sections[2].querySelector('.small-text').textContent = t('tip_channel_id');
-
   // Connection Mode
-  sections[3].querySelector('h3').textContent = t('connection_mode');
+  sections[2].querySelector('h3').textContent = t('connection_mode');
   document.getElementById('mode-lite').innerHTML = `<span class="mode-icon">🎈</span> ${t('lite_mode')}`;
   document.getElementById('mode-pro').innerHTML = `<span class="mode-icon">🚀</span> ${t('pro_mode')}`;
 
@@ -373,16 +418,16 @@ function updateLanguageUI() {
   document.getElementById('security-note-text').textContent = t('security_note_text');
 
   // Content Preferences
-  sections[4].querySelector('h3').textContent = t('content_preferences');
-  sections[4].querySelector('span').textContent = t('filter_shorts');
-  sections[4].querySelector('.small-text').innerHTML = `
+  sections[3].querySelector('h3').textContent = t('content_preferences');
+  sections[3].querySelector('span').textContent = t('filter_shorts');
+  sections[3].querySelector('.small-text').innerHTML = `
     <strong>${t('lite_mode')}:</strong> ${t('lite_filter_desc')}<br>
     <strong>${t('pro_mode')}:</strong> ${t('pro_filter_desc')}
   `;
 
   // Participate in Ranking
-  sections[5].querySelector('span').textContent = t('participate_ranking');
-  sections[5].querySelector('.small-text').textContent = t('ranking_desc');
+  sections[4].querySelector('span').textContent = t('participate_ranking');
+  sections[4].querySelector('.small-text').textContent = t('ranking_desc');
 
   // Gate Modal
   document.querySelector('#gate-modal h3').textContent = t('parents_only');
@@ -411,8 +456,6 @@ const gateModal = document.getElementById('gate-modal');
 const apiKeyInput = document.getElementById('api-key-input');
 const channelList = document.getElementById('channel-list');
 const apiStatus = document.getElementById('api-status');
-const channelSearchInput = document.getElementById('channel-search-input');
-const searchResultsDropdown = document.getElementById('search-results-dropdown');
 const loginBtn = document.getElementById('google-login-btn');
 
 // Profile Elements
@@ -427,47 +470,37 @@ const videoCount = document.getElementById('video-count');
 const sortButtons = document.querySelectorAll('.sort-btn');
 
 // --- Initialization ---
-// --- Google User Info ---
-async function fetchGoogleUserInfo() {
-  if (!state.accessToken) return;
-  try {
-    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { 'Authorization': 'Bearer ' + state.accessToken }
-    });
-    const userInfo = await res.json();
+// --- Supabase Auth & Sync ---
+function setupSupabaseAuth() {
+  supabase.auth.onAuthStateChange((event, session) => {
+    state.user = session?.user || null;
+    updateSyncUI();
 
-    if (userInfo.name) {
-      const userCard = document.getElementById('google-user-info');
-      const avatar = document.getElementById('google-avatar');
-      const nameEl = document.getElementById('google-name');
-      const emailEl = document.getElementById('google-email');
-
-      if (userCard && avatar && nameEl) {
-        userCard.classList.remove('hidden');
-        userCard.style.display = 'flex'; // Ensure flex layout
-
-        nameEl.textContent = userInfo.name;
-        // Only show email if it's not super long or private, but userinfo.email is fine
-        if (emailEl && userInfo.email) emailEl.textContent = userInfo.email;
-
-        if (userInfo.picture) avatar.src = userInfo.picture;
-        else avatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(userInfo.name)}&background=random`;
-      }
+    // Automatically sync when user logs in
+    if (event === 'SIGNED_IN') {
+      syncWithSupabase();
+      checkAndUploadStats(true); // Anonymous stats
     }
-  } catch (e) {
-    console.warn('Failed to fetch Google User Info', e);
-  }
+  });
 }
 
-// --- Sync UI & Logout ---
+function handleLogin() {
+  supabase.auth.signInWithOAuth({ provider: 'google' });
+}
+
+function handleLogout() {
+  supabase.auth.signOut();
+  showSyncToast(t('logout_success') || 'Logged out successfully.');
+}
+
 function updateSyncUI() {
-  const loginBtn = document.getElementById('google-login-btn');
-  const logoutBtn = document.getElementById('google-logout-btn');
-  const userInfoCard = document.getElementById('google-user-info');
+  const loginBtn = document.getElementById('sync-login-btn');
+  const logoutBtn = document.getElementById('sync-logout-btn');
+  const userInfoCard = document.getElementById('sync-user-info');
 
   if (!loginBtn) return;
 
-  if (state.accessToken) {
+  if (state.user) {
     // Logged In State
     loginBtn.style.display = 'block';
     loginBtn.textContent = t('sync_now');
@@ -475,7 +508,7 @@ function updateSyncUI() {
     loginBtn.onclick = async () => {
       loginBtn.disabled = true;
       loginBtn.textContent = t('syncing');
-      await syncWithDrive();
+      await syncWithSupabase();
       loginBtn.disabled = false;
       loginBtn.textContent = t('sync_now');
     };
@@ -489,6 +522,19 @@ function updateSyncUI() {
     if (userInfoCard) {
       userInfoCard.classList.remove('hidden');
       userInfoCard.style.display = 'flex';
+
+      const metadata = state.user.user_metadata;
+      const avatar = document.getElementById('sync-avatar');
+      const nameEl = document.getElementById('sync-name');
+      const emailEl = document.getElementById('sync-email');
+
+      if (nameEl && metadata?.name) nameEl.textContent = metadata.name;
+      if (emailEl && state.user.email) emailEl.textContent = state.user.email;
+
+      if (avatar) {
+        if (metadata?.avatar_url) avatar.src = metadata.avatar_url;
+        else if (metadata?.name) avatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.name)}&background=random`;
+      }
     }
 
     // Check if wizard needs to be closed (Restored Backup)
@@ -505,13 +551,7 @@ function updateSyncUI() {
     loginBtn.style.display = 'block';
     loginBtn.textContent = t('login_google');
     loginBtn.disabled = false;
-    loginBtn.onclick = () => {
-      if (state.tokenClient) {
-        state.tokenClient.requestAccessToken({ prompt: 'consent' });
-      } else {
-        console.warn('Google Token Client not initialized');
-      }
-    };
+    loginBtn.onclick = handleLogin;
 
     if (logoutBtn) logoutBtn.style.display = 'none';
 
@@ -522,20 +562,84 @@ function updateSyncUI() {
   }
 }
 
-function handleLogout() {
-  if (state.accessToken) {
-    const token = state.accessToken;
-    state.accessToken = null;
+async function syncWithSupabase() {
+  const dbConfig = await downloadFromSupabase();
 
-    // Attempt revoke (best effort)
-    try {
-      if (window.google && window.google.accounts) {
-        google.accounts.oauth2.revoke(token, () => { console.log('Token revoked'); });
-      }
-    } catch (e) { console.warn('Revoke failed', e); }
+  // ── Case 1: No cloud backup yet → first-time upload ──────────────────────
+  if (!dbConfig) {
+    console.log('Sync: No cloud file found — uploading local data for the first time.');
+    await saveToSupabase();
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
+    return;
   }
-  updateSyncUI();
-  showSyncToast(t('logout_success') || 'Logged out successfully.');
+
+  const localHasData = hasMeaningfulData(state.data);
+  const cloudHasData = hasMeaningfulData(dbConfig);
+
+  // ── Case 3: Local is empty, cloud has real data → silently restore ────────
+  if (!localHasData && cloudHasData) {
+    console.log('Sync: Local has no channels — restoring from cloud.');
+    applyCloudData(dbConfig);
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_restored'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  // ── Case 4: Cloud is empty, local has real data → push to cloud ──────────
+  if (localHasData && !cloudHasData) {
+    console.log('Sync: Cloud has no channels — uploading local data.');
+    await saveToSupabase();
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  // ── Case 5: Neither side has meaningful data ──────────────────────────────
+  if (!localHasData && !cloudHasData) {
+    await saveToSupabase();
+    return;
+  }
+
+  // ── Case 6: Both sides have real data — compare timestamps ───────────────
+  const localTime = state.data.lastUpdated ? new Date(state.data.lastUpdated).getTime() : 0;
+  const cloudTime = dbConfig.lastUpdated ? new Date(dbConfig.lastUpdated).getTime() : 0;
+  console.log(`Sync: Local (${state.data.lastUpdated}) vs Cloud (${dbConfig.lastUpdated})`);
+
+  if (localTime === cloudTime) {
+    console.log('Sync: Already up to date.');
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_uptodate'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  if (localTime > cloudTime) {
+    // Local is newer → push to cloud (user just made changes on this device)
+    console.log('Sync: Local is newer — uploading to cloud.');
+    await saveToSupabase();
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  // Cloud is newer → ask user which version to keep
+  console.log('Sync: Cloud is newer — showing conflict dialog.');
+  const choice = await showSyncConflictDialog(state.data, dbConfig);
+  if (choice === 'cloud') {
+    applyCloudData(dbConfig);
+    showSyncToast(t('sync_restored'));
+  } else {
+    // User chose to keep local → push it to cloud
+    await saveToSupabase();
+    showSyncToast(t('sync_backed_up'));
+  }
+  state.lastSyncedAt = new Date().toISOString();
+  updateLastSyncedUI();
 }
 
 // --- App Startup ---
@@ -546,7 +650,7 @@ function startApp() {
   const spinner = document.querySelector('.loading-state');
   if (spinner) spinner.style.display = 'none';
 
-  // One-time setup (event listeners, GSI, etc.)
+  // One-time setup (event listeners, Supabase Auth, etc.)
   if (!appStarted) {
     console.log('Starting App (first time setup)...');
     appStarted = true;
@@ -554,18 +658,14 @@ function startApp() {
     setupEventListeners();
     setupDangerZoneListener();
 
-    // Initialize GSI if not already active
-    const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
-      ? GOOGLE_CLIENT_ID
-      : localStorage.getItem('safetube_client_id');
-
-    if (clientId) initializeGSI(clientId);
+    setupSupabaseAuth();
   }
 
   // Always run: UI updates & video fetch
   updateLanguageUI();
   updateProfileUI();
   updateSyncUI();
+  updateTimeIndicator();
   fetchMissingChannelIcons();
   fetchAllVideos();
 }
@@ -588,7 +688,7 @@ function init() {
   startApp();
 
   // Show Onboarding Tooltip (Login Nudge) for users who finished setup but aren't logged in
-  if (currentProfile && !state.accessToken && !localStorage.getItem('onboarding_dismissed')) {
+  if (currentProfile && !state.user && !localStorage.getItem('onboarding_dismissed')) {
     setTimeout(() => {
       const tooltip = document.getElementById('onboarding-tooltip');
       if (tooltip) {
@@ -649,7 +749,6 @@ function dismissOnboarding(tooltip) {
   setTimeout(() => tooltip.remove(), 400);
 }
 
-
 function loadLocalData() {
   const rawData = localStorage.getItem(STORAGE_KEY_DATA);
 
@@ -678,164 +777,14 @@ function saveLocalData() {
   state.data.lastUpdated = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY_DATA, JSON.stringify(state.data));
   // Auto-sync to cloud with debounce — skip if we're currently applying cloud data (prevents save loop)
-  if (state.accessToken && !state.isApplyingCloudData) {
+  if (state.user && !state.isApplyingCloudData) {
     clearTimeout(state.driveSaveTimer);
-    state.driveSaveTimer = setTimeout(() => saveToDrive(), 3000);
+    state.driveSaveTimer = setTimeout(() => saveToSupabase(), 3000);
   }
 }
 
 function getCurrentProfile() {
   return state.data.profiles.find(p => p.id === state.data.currentProfileId) || state.data.profiles[0];
-}
-
-// --- GSI & Drive Sync ---
-function initializeGSI(clientId) {
-  if (!window.google) {
-    setTimeout(() => initializeGSI(clientId), 500);
-    return;
-  }
-
-  try {
-    state.tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: SCOPES,
-      callback: async (response) => {
-        if (response.error !== undefined) {
-          throw (response);
-        }
-        state.accessToken = response.access_token;
-
-        // Show syncing state
-        const loginBtn = document.getElementById('google-login-btn');
-        if (loginBtn) {
-          loginBtn.textContent = t('syncing');
-          loginBtn.disabled = true;
-        }
-
-        await fetchGoogleUserInfo().catch(console.warn);
-        await syncWithDrive();
-
-        // Reset UI to Logged In state
-        updateSyncUI();
-
-        // After sync, upload stats with correct channel data (force=true)
-        checkAndUploadStats(true);
-
-        loginBtn.textContent = 'Sync Now (Re-sync)';
-        loginBtn.disabled = false; // Re-enable for manual sync
-        loginBtn.onclick = async () => {
-          loginBtn.textContent = 'Syncing...';
-          loginBtn.disabled = true;
-          await syncWithDrive();
-          loginBtn.textContent = 'Sync Now (Re-sync)';
-          loginBtn.disabled = false;
-        };
-      },
-    });
-    loginBtn.style.display = 'block';
-    // If we already have a token (rare in this flow but possible), update UI
-    if (state.accessToken) {
-      fetchGoogleUserInfo();
-      loginBtn.textContent = 'Sync Now (Re-sync)';
-    } else {
-      loginBtn.textContent = 'Login with Google to Sync';
-    }
-
-  } catch (e) {
-    console.error("GSI Init Error", e);
-  }
-}
-
-async function syncWithDrive() {
-  const fileId = await findConfigFile();
-
-  // ── Case 1: No cloud backup yet → first-time upload ──────────────────────
-  if (!fileId) {
-    console.log('Sync: No cloud file found — uploading local data for the first time.');
-    await saveToDrive();
-    state.lastSyncedAt = new Date().toISOString();
-    showSyncToast(t('sync_backed_up'));
-    updateLastSyncedUI();
-    return;
-  }
-
-  const driveConfig = await downloadConfigFile(fileId);
-
-  // ── Case 2: Cloud file exists but is empty / corrupt → upload local ──────
-  if (!driveConfig || !Array.isArray(driveConfig.profiles)) {
-    console.log('Sync: Cloud file is invalid — re-uploading local data.');
-    await saveToDrive();
-    state.lastSyncedAt = new Date().toISOString();
-    showSyncToast(t('sync_backed_up'));
-    updateLastSyncedUI();
-    return;
-  }
-
-  const localHasData = hasMeaningfulData(state.data);
-  const cloudHasData = hasMeaningfulData(driveConfig);
-
-  // ── Case 3: Local is empty, cloud has real data → silently restore ────────
-  if (!localHasData && cloudHasData) {
-    console.log('Sync: Local has no channels — restoring from cloud.');
-    applyCloudData(driveConfig);
-    state.lastSyncedAt = new Date().toISOString();
-    showSyncToast(t('sync_restored'));
-    updateLastSyncedUI();
-    return;
-  }
-
-  // ── Case 4: Cloud is empty, local has real data → push to cloud ──────────
-  if (localHasData && !cloudHasData) {
-    console.log('Sync: Cloud has no channels — uploading local data.');
-    await saveToDrive();
-    state.lastSyncedAt = new Date().toISOString();
-    showSyncToast(t('sync_backed_up'));
-    updateLastSyncedUI();
-    return;
-  }
-
-  // ── Case 5: Neither side has meaningful data ──────────────────────────────
-  if (!localHasData && !cloudHasData) {
-    await saveToDrive();
-    return;
-  }
-
-  // ── Case 6: Both sides have real data — compare timestamps ───────────────
-  const localTime = state.data.lastUpdated ? new Date(state.data.lastUpdated).getTime() : 0;
-  const cloudTime = driveConfig.lastUpdated ? new Date(driveConfig.lastUpdated).getTime() : 0;
-  console.log(`Sync: Local (${state.data.lastUpdated}) vs Cloud (${driveConfig.lastUpdated})`);
-
-  if (localTime === cloudTime) {
-    console.log('Sync: Already up to date.');
-    state.lastSyncedAt = new Date().toISOString();
-    showSyncToast(t('sync_uptodate'));
-    updateLastSyncedUI();
-    return;
-  }
-
-  if (localTime > cloudTime) {
-    // Local is newer → push to cloud (user just made changes on this device)
-    console.log('Sync: Local is newer — uploading to cloud.');
-    await saveToDrive();
-    state.lastSyncedAt = new Date().toISOString();
-    showSyncToast(t('sync_backed_up'));
-    updateLastSyncedUI();
-    return;
-  }
-
-  // Cloud is newer → ask user which version to keep
-  console.log('Sync: Cloud is newer — showing conflict dialog.');
-  const choice = await showSyncConflictDialog(state.data, driveConfig);
-  if (choice === 'cloud') {
-    applyCloudData(driveConfig);
-    showSyncToast(t('sync_restored'));
-  } else {
-    // User chose to keep local → push it to cloud
-    await saveToDrive();
-    showSyncToast(t('sync_backed_up'));
-  }
-  state.lastSyncedAt = new Date().toISOString();
-  updateLastSyncedUI();
 }
 
 // Old implementations removed. Using the new ones at the top.
@@ -1417,6 +1366,118 @@ function applySmartInterleaving(videos) {
   return result;
 }
 
+// === WATCH TIME MANAGEMENT ===
+
+function getTodayStr() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function getTodayWatchSeconds(profileId) {
+  const key = STORAGE_KEY_WATCH_TIME + profileId + '_' + getTodayStr();
+  return parseInt(localStorage.getItem(key) || '0', 10);
+}
+
+function addWatchSeconds(profileId, seconds) {
+  const key = STORAGE_KEY_WATCH_TIME + profileId + '_' + getTodayStr();
+  const current = getTodayWatchSeconds(profileId);
+  localStorage.setItem(key, String(current + Math.round(seconds)));
+}
+
+function fmtTime(totalSeconds) {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Timer state — tracks a currently-playing session
+let _watchTimerStart = null;    // Date.now() when playback last started
+let _watchTimerInterval = null; // setInterval handle
+
+function startWatchTimer() {
+  if (_watchTimerStart !== null) return; // already running
+  _watchTimerStart = Date.now();
+  _watchTimerInterval = setInterval(() => {
+    checkWatchTimeLimit();
+    updateTimeIndicator();
+  }, 10000); // check every 10 s
+}
+
+function stopWatchTimer() {
+  if (_watchTimerStart === null) return;
+  const elapsed = (Date.now() - _watchTimerStart) / 1000;
+  _watchTimerStart = null;
+  clearInterval(_watchTimerInterval);
+  _watchTimerInterval = null;
+  const profile = getCurrentProfile();
+  if (profile && elapsed > 1) {
+    addWatchSeconds(profile.id, elapsed);
+    updateTimeIndicator();
+  }
+}
+
+function checkWatchTimeLimit() {
+  const profile = getCurrentProfile();
+  if (!profile || !profile.dailyLimit) return;
+  const limitSec = profile.dailyLimit * 60;
+  const elapsed = _watchTimerStart ? (Date.now() - _watchTimerStart) / 1000 : 0;
+  const todayTotal = getTodayWatchSeconds(profile.id) + elapsed;
+  const remaining = limitSec - todayTotal;
+  if (remaining <= 300 && remaining > 290) {
+    showWatchTimeWarning(Math.ceil(remaining / 60));
+  }
+  if (remaining <= 0) {
+    stopWatchTimer();
+    pauseAndShowTimeLimitReached();
+  }
+}
+
+function updateTimeIndicator() {
+  const badge = document.getElementById('watch-time-badge');
+  if (!badge) return;
+  const profile = getCurrentProfile();
+  if (!profile || !profile.dailyLimit) {
+    badge.textContent = '';
+    badge.className = 'watch-time-badge';
+    return;
+  }
+  const limitSec = profile.dailyLimit * 60;
+  const elapsed = _watchTimerStart ? (Date.now() - _watchTimerStart) / 1000 : 0;
+  const todayTotal = getTodayWatchSeconds(profile.id) + elapsed;
+  const remaining = Math.max(0, limitSec - todayTotal);
+  badge.textContent = t('time_remaining', { t: fmtTime(remaining) });
+  badge.className = 'watch-time-badge' + (remaining <= 300 ? ' time-low' : '');
+}
+
+function showWatchTimeWarning(minutesLeft) {
+  const toast = document.getElementById('api-status');
+  if (!toast) return;
+  toast.textContent = t('time_limit_warning', { n: minutesLeft });
+  toast.className = 'status-toast warning show';
+  setTimeout(() => toast.classList.remove('show'), 6000);
+}
+
+function pauseAndShowTimeLimitReached() {
+  if (activeYTPlayer) {
+    try { activeYTPlayer.pauseVideo(); } catch (e) { /* ignore */ }
+  }
+  document.querySelector('.time-limit-overlay')?.remove();
+  const wrapper = document.querySelector('#player-modal .video-wrapper');
+  if (!wrapper) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'time-limit-overlay';
+  overlay.innerHTML = `
+    <div class="time-limit-content">
+      <div class="time-limit-icon">⏰</div>
+      <p class="time-limit-msg">${t('time_limit_reached_title')}</p>
+      <p class="time-limit-sub">${t('time_limit_reached_sub')}</p>
+      <button class="ended-btn ended-close">${t('close')}</button>
+    </div>
+  `;
+  overlay.querySelector('.ended-close').onclick = closePlayer;
+  wrapper.appendChild(overlay);
+}
+
 function getSortedVideos(videos) {
   const v = [...videos]; // Copy array
   if (state.currentSort === 'newest') {
@@ -1526,16 +1587,11 @@ async function fetchMissingChannelIcons() {
 function finalizeIconUpdate() {
   saveLocalData();
   renderChannelNav();
-  if (state.accessToken) saveToDrive();
+  if (state.user) saveToSupabase();
 }
 
 
-// --- Channel Search ---
-let searchDebounce;
-
-// --- Fetch Top Ranked Channels from Stats ---
-
-// Shared cache so all callers (settings search, recommendation modal, wizard) share one fetch
+// Shared cache so all callers (recommendation modal, wizard) share one fetch
 let _rankingsCache = null;
 let _rankingsFetchPromise = null;
 
@@ -1560,85 +1616,6 @@ async function fetchRankingsRaw() {
   return _rankingsFetchPromise;
 }
 
-async function fetchTopRankedChannels() {
-  const raw = await fetchRankingsRaw();
-  // Transform to search-result format for the settings dropdown
-  return raw.map(ch => ({
-    snippet: {
-      channelId: ch.id,
-      channelTitle: ch.name,
-      description: `${ch.count || 0} users subscribed`,
-      thumbnails: {
-        default: {
-          url: ch.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(ch.name)}&size=88&background=random`
-        }
-      }
-    }
-  }));
-}
-
-async function searchChannels(query) {
-  if (!state.data.apiKey) {
-    alert('Please enter a valid API Key first.');
-    return;
-  }
-  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(query)}&maxResults=5&key=${state.data.apiKey}`;
-  try {
-    const res = await fetch(searchUrl);
-    const data = await res.json();
-    renderSearchResults(data.items || []);
-  } catch (error) {
-    console.error('Search error:', error);
-  }
-}
-
-function renderSearchResults(items) {
-  if (items.length === 0) {
-    searchResultsDropdown.innerHTML = '<li style="padding:10px;">No channels found.</li>';
-    searchResultsDropdown.classList.remove('hidden');
-    return;
-  }
-  searchResultsDropdown.innerHTML = '';
-  items.forEach(item => {
-    const li = document.createElement('li');
-    li.className = 'search-result-item';
-    li.onclick = () => addChannelFromSearch(item);
-    const thumb = item.snippet.thumbnails.default?.url;
-    const fallbackThumb = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.snippet.channelTitle)}&size=88&background=random`;
-    li.innerHTML = `
-      <img src="${thumb || fallbackThumb}" class="search-avatar" onerror="this.onerror=null;this.src='${fallbackThumb}'" />
-      <div class="search-info">
-        <span class="search-name">${item.snippet.channelTitle}</span>
-        <span class="search-sub">${item.snippet.description.substring(0, 30)}...</span>
-      </div>
-    `;
-    searchResultsDropdown.appendChild(li);
-  });
-  searchResultsDropdown.classList.remove('hidden');
-}
-
-function addChannelFromSearch(item) {
-  const profile = getCurrentProfile();
-  const newChannel = {
-    id: item.snippet.channelId,
-    name: item.snippet.channelTitle,
-    thumbnail: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.high?.url || item.snippet.thumbnails.default?.url || '' // Store Thumbnail
-  };
-
-  if (profile.channels.some(c => c.id === newChannel.id)) {
-    alert('Channel already added!');
-    return;
-  }
-
-  profile.channels.push(newChannel);
-  saveLocalData();
-  renderChannelList();
-  renderChannelNav(); // Update Nav
-
-  channelSearchInput.value = '';
-  searchResultsDropdown.classList.add('hidden');
-  fetchAllVideos(); // Will refresh videos
-}
 
 
 // --- Rendering ---
@@ -1855,10 +1832,16 @@ function renderProfileList() {
       }
     };
 
+    const todayUsed = fmtTime(getTodayWatchSeconds(p.id));
+    const limitOptions = [0, 30, 60, 90, 120].map(v => {
+      const label = v === 0 ? t('no_limit') : (v < 60 ? `${v} ${t('minutes')}` : `${v / 60} ${t('hours')}`);
+      return `<option value="${v}" ${(p.dailyLimit || 0) === v ? 'selected' : ''}>${label}</option>`;
+    }).join('');
+
     div.innerHTML = `
             <div class="profile-info-row" style="display:flex; align-items:center; width:100%; gap: 10px;">
                 <span class="drag-handle" style="cursor: grab; color: #ccc; font-size: 1.2rem; padding: 5px;">⣿</span>
-                
+
                 <button class="avatar-btn" title="Click to change avatar" style="background: #f0f0f0; border:none; font-size: 1.5rem; border-radius: 50%; width: 40px; height: 40px; cursor: pointer; transition: transform 0.2s;">
                   ${p.avatar}
                 </button>
@@ -1876,6 +1859,13 @@ function renderProfileList() {
                     <button class="btn-icon btn-edit" data-id="${p.id}" title="Rename">✏️</button>
                     ${state.data.profiles.length > 1 ? `<button class="btn-icon btn-delete" data-id="${p.id}" title="Delete">🗑️</button>` : ''}
                 </div>
+            </div>
+            <div class="profile-time-limit-row">
+              <span class="time-limit-label">⏱ ${t('daily_limit')}</span>
+              <select class="time-limit-select" data-profile-id="${p.id}">
+                ${limitOptions}
+              </select>
+              ${(p.dailyLimit || 0) > 0 ? `<span class="time-used-label">${t('time_used_today', { t: todayUsed })}</span>` : ''}
             </div>
         `;
 
@@ -1905,6 +1895,19 @@ function renderProfileList() {
   });
   profileListContainer.querySelectorAll('.btn-delete').forEach(btn => {
     btn.onclick = (e) => { e.stopPropagation(); deleteProfile(btn.dataset.id); };
+  });
+
+  // Daily limit selectors
+  profileListContainer.querySelectorAll('.time-limit-select').forEach(sel => {
+    sel.onchange = () => {
+      const profile = state.data.profiles.find(p => p.id === sel.dataset.profileId);
+      if (profile) {
+        profile.dailyLimit = parseInt(sel.value, 10);
+        saveLocalData();
+        updateTimeIndicator();
+        renderProfileList(); // re-render to show/hide "used today" label
+      }
+    };
   });
 }
 
@@ -2060,6 +2063,7 @@ async function loadMoreChannelVideos(channelId) {
 }
 
 function renderChannelList() {
+  if (!channelList) return;
   const profile = getCurrentProfile();
   channelList.innerHTML = '';
   profile.channels.forEach((channel, index) => {
@@ -2161,7 +2165,12 @@ function openPlayer(video) {
       },
       events: {
         onStateChange: (event) => {
-          if (event.data === 0) { // 0 = YT.PlayerState.ENDED
+          if (event.data === 1) {      // playing
+            startWatchTimer();
+          } else if (event.data === 2) { // paused
+            stopWatchTimer();
+          } else if (event.data === 0) { // ended
+            stopWatchTimer();
             showEndedOverlay(video, activeYTPlayer);
           }
         }
@@ -2282,6 +2291,8 @@ function showEndedOverlay(_video, player) {
 }
 
 function closePlayer() {
+  stopWatchTimer(); // save elapsed time before destroying player
+  document.querySelector('.time-limit-overlay')?.remove();
   playerModal.classList.add('hidden');
   document.getElementById('youtube-player').innerHTML = '';
   document.querySelector('.video-ended-overlay')?.remove();
@@ -2310,7 +2321,6 @@ function openSettings() {
 
 function closeSettings() {
   settingsModal.classList.add('hidden');
-  searchResultsDropdown.classList.add('hidden');
   toggleBodyScroll(false);
 }
 
@@ -2336,6 +2346,7 @@ function addProfile(name) {
 }
 
 function switchProfile(id) {
+  stopWatchTimer(); // stop any running timer from the previous profile
   state.data.currentProfileId = id;
   state.activeChannelId = null; // Reset filter on switch
   saveLocalData();
@@ -2343,6 +2354,7 @@ function switchProfile(id) {
   renderChannelList();
   fetchAllVideos();
   fetchMissingChannelIcons();
+  updateTimeIndicator();
 }
 
 function editProfileName(id) {
@@ -2600,7 +2612,6 @@ function setupEventListeners() {
       apiStatus.textContent = t('status_lite_active');
       apiStatus.classList.add('success', 'show');
 
-      searchResultsDropdown.classList.add('hidden'); // Clear search
       fetchAllVideos(true);
 
     } else {
@@ -2643,39 +2654,6 @@ function setupEventListeners() {
   addProfileBtn.onclick = () => {
     addProfile(newProfileNameInput.value.trim());
   };
-
-  // Search Input Listeners
-  channelSearchInput.addEventListener('focus', async () => {
-    if (!channelSearchInput.value.trim()) {
-      const topChannels = await fetchTopRankedChannels();
-      renderSearchResults(topChannels);
-    }
-  });
-
-  channelSearchInput.addEventListener('input', async (e) => {
-    const query = e.target.value.trim();
-    clearTimeout(searchDebounce);
-
-    if (query.length === 0) {
-      const topChannels = await fetchTopRankedChannels();
-      renderSearchResults(topChannels);
-      return;
-    }
-
-    if (query.length < 3) {
-      searchResultsDropdown.classList.add('hidden');
-      return;
-    }
-    searchDebounce = setTimeout(() => {
-      searchChannels(query);
-    }, 500);
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.search-wrapper')) {
-      searchResultsDropdown.classList.add('hidden');
-    }
-  });
 
   document.getElementById('close-player').onclick = closePlayer;
 
@@ -2786,40 +2764,27 @@ async function showOnboardingWizard() {
     await loadWizardRecommendations(modal, prefetchedChannels, prefetchPromise);
   };
 
-  // Google Login Logic (Directly Visible)
-  const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
-    ? GOOGLE_CLIENT_ID
-    : localStorage.getItem('safetube_client_id');
+  // Cloud Login/Sync Logic (Directly Visible)
+  googleContainer.innerHTML = `
+      <button class="wizard-btn-google">
+         <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+           <g transform="matrix(1, 0, 0, 1, 27.009001, -39.238998)">
+             <path fill="#4285F4" d="M -3.264 51.509 C -3.264 50.719 -3.334 49.969 -3.454 49.239 L -14.754 49.239 L -14.754 53.749 L -8.284 53.749 C -8.574 55.229 -9.424 56.479 -10.684 57.329 L -10.684 60.329 L -6.824 60.329 C -4.564 58.239 -3.264 55.159 -3.264 51.509 Z"/>
+             <path fill="#34A853" d="M -14.754 63.239 C -11.514 63.239 -8.804 62.159 -6.824 60.329 L -10.684 57.329 C -11.764 58.049 -13.134 58.489 -14.754 58.489 C -17.884 58.489 -20.534 56.379 -21.484 53.529 L -25.464 53.529 L -25.464 56.619 C -23.494 60.539 -19.464 63.239 -14.754 63.239 Z"/>
+             <path fill="#FBBC05" d="M -21.484 53.529 C -21.734 52.809 -21.864 52.039 -21.864 51.239 C -21.864 50.439 -21.734 49.669 -21.484 48.949 L -21.484 45.859 L -25.464 45.859 C -26.284 47.479 -26.754 49.299 -26.754 51.239 C -26.754 53.179 -26.284 54.999 -25.464 56.619 L -21.484 53.529 Z"/>
+             <path fill="#EA4335" d="M -14.754 43.989 C -12.984 43.989 -11.404 44.599 -10.154 45.789 L -6.734 42.369 C -8.804 40.429 -11.514 39.239 -14.754 39.239 C -19.464 39.239 -23.494 41.939 -25.464 45.859 L -21.484 48.949 C -20.534 46.099 -17.884 43.989 -14.754 43.989 Z"/>
+           </g>
+         </svg>
+         ${t('restore_backup')}
+      </button>
+    `;
 
-  if (clientId) {
-    initializeGSI(clientId);
-
-    googleContainer.innerHTML = `
-        <button class="wizard-btn-google">
-           <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
-             <g transform="matrix(1, 0, 0, 1, 27.009001, -39.238998)">
-               <path fill="#4285F4" d="M -3.264 51.509 C -3.264 50.719 -3.334 49.969 -3.454 49.239 L -14.754 49.239 L -14.754 53.749 L -8.284 53.749 C -8.574 55.229 -9.424 56.479 -10.684 57.329 L -10.684 60.329 L -6.824 60.329 C -4.564 58.239 -3.264 55.159 -3.264 51.509 Z"/>
-               <path fill="#34A853" d="M -14.754 63.239 C -11.514 63.239 -8.804 62.159 -6.824 60.329 L -10.684 57.329 C -11.764 58.049 -13.134 58.489 -14.754 58.489 C -17.884 58.489 -20.534 56.379 -21.484 53.529 L -25.464 53.529 L -25.464 56.619 C -23.494 60.539 -19.464 63.239 -14.754 63.239 Z"/>
-               <path fill="#FBBC05" d="M -21.484 53.529 C -21.734 52.809 -21.864 52.039 -21.864 51.239 C -21.864 50.439 -21.734 49.669 -21.484 48.949 L -21.484 45.859 L -25.464 45.859 C -26.284 47.479 -26.754 49.299 -26.754 51.239 C -26.754 53.179 -26.284 54.999 -25.464 56.619 L -21.484 53.529 Z"/>
-               <path fill="#EA4335" d="M -14.754 43.989 C -12.984 43.989 -11.404 44.599 -10.154 45.789 L -6.734 42.369 C -8.804 40.429 -11.514 39.239 -14.754 39.239 C -19.464 39.239 -23.494 41.939 -25.464 45.859 L -21.484 48.949 C -20.534 46.099 -17.884 43.989 -14.754 43.989 Z"/>
-             </g>
-           </svg>
-           ${t('restore_backup')}
-        </button>
-      `;
-
-    const btn = googleContainer.querySelector('button');
-    btn.onclick = () => {
-      btn.innerHTML = `${t('syncing')}`;
-      btn.disabled = true;
-      if (state.tokenClient) {
-        state.tokenClient.requestAccessToken({ prompt: 'consent' });
-      } else {
-        initializeGSI(clientId); // retry
-        setTimeout(() => { if (state.tokenClient) state.tokenClient.requestAccessToken({ prompt: 'consent' }); }, 500);
-      }
-    };
-  }
+  const btn = googleContainer.querySelector('button');
+  btn.onclick = () => {
+    btn.innerHTML = `${t('syncing')}`;
+    btn.disabled = true;
+    handleLogin(); // Using Supabase OAuth handler
+  };
 
   // Step 2 Logic: Finish
   const finishBtn = modal.querySelector('#wizard-finish-btn');
@@ -2976,60 +2941,14 @@ async function loadWizardRecommendations(modal, prefetchedChannels, prefetchProm
   }
 }
 
-// === SMART CHANNEL RECOMMENDATIONS ===
 
-// Name-based category keywords for matching channels to interests
-const CHANNEL_CATEGORY_KEYWORDS = {
-  music: ['song', 'music', 'sing', 'pinkfong', 'cocomelon', 'simple songs', 'chuchu', 'baby bum', 'loolookids', 'kidz', 'nursery', 'rhyme', 'melody', 'lullaby'],
-  toddler: ['baby', 'toddler', 'babybus', 'peppa pig', 'paw patrol', 'hey duggee', 'cocomelon', 'bluey', 'bluey'],
-  education: ['learn', 'alphablocks', 'numberblocks', 'blippi', 'sesame', 'pbs', 'storybots', 'preschool', 'abc', 'phonics'],
-  science: ['mark rober', 'crunchlabs', 'national geographic', 'science', 'stem', 'experiment', 'discovery', '昆蟲'],
-  animation: ['cartoon', 'animation', 'peppa', 'masha', 'wolfoo', 'oddbods', 'adventures', 'tales', 'bluey'],
-  activities: ['dude perfect', 'trick', 'sport', 'challenge', 'explore', 'hafu'],
-  chinese: ['哈哈', '昆蟲', '樂樂', '台灣', 'hafu go', 'chinese', 'mandarin'],
-};
-
-function getChannelCategories(channelName) {
-  const lower = channelName.toLowerCase();
-  return Object.entries(CHANNEL_CATEGORY_KEYWORDS)
-    .filter(([, keywords]) => keywords.some(kw => lower.includes(kw)))
-    .map(([cat]) => cat);
-}
-
-function getSmartRecommendations(allChannels) {
-  const profile = getCurrentProfile();
-  const addedIds = new Set(profile.channels.map(c => c.id));
-
-  // Build category profile from user's existing channels
-  const profileCategories = new Set();
-  profile.channels.forEach(ch => {
-    getChannelCategories(ch.name).forEach(cat => profileCategories.add(cat));
-  });
-
-  const available = allChannels.filter(ch => !addedIds.has(ch.id));
-
-  // If nearly all channels are already added, include the added ones too so the
-  // tab always has content. renderRecGrid will show them with the "already added" badge.
-  const pool = available.length >= 4 ? available : allChannels;
-
-  if (profileCategories.size === 0) return pool.slice(0, 12);
-
-  // Score each channel by category overlap with user's interests
-  const scored = pool.map(ch => {
-    const cats = getChannelCategories(ch.name);
-    const score = cats.filter(c => profileCategories.has(c)).length;
-    return { ...ch, _score: score };
-  });
-  scored.sort((a, b) => b._score - a._score);
-  return scored.slice(0, 12);
-}
 
 async function showAddChannelModal() {
   // Toggle: close if already open
   const existing = document.getElementById('add-channel-modal');
   if (existing) { existing.remove(); return; }
 
-  const profile = getCurrentProfile();
+  const hasApiKey = !!state.data.apiKey;
 
   const modal = document.createElement('div');
   modal.id = 'add-channel-modal';
@@ -3043,56 +2962,90 @@ async function showAddChannelModal() {
           <line x1="6" y1="6" x2="18" y2="18"></line>
         </svg>
       </button>
-      <div class="modal-header" style="margin-bottom:16px;">
-        <h2 style="font-size:1.2rem; margin:0;">✨ 新增頻道</h2>
+      <div class="modal-header" style="margin-bottom:12px;">
+        <h2 style="font-size:1.2rem; margin:0;">📺 管理頻道</h2>
       </div>
+      ${hasApiKey ? `
+      <div style="position:relative;margin-bottom:14px;">
+        <input id="modal-channel-search" class="manage-search-input" type="text"
+          placeholder="搜尋 YouTube 頻道名稱…" autocomplete="off" />
+        <ul id="modal-search-results" class="search-dropdown hidden"
+          style="position:absolute;width:100%;z-index:10;top:calc(100% + 4px);left:0;"></ul>
+      </div>` : ''}
       <div class="rec-tabs">
-        <button class="rec-tab active" data-tab="popular">🏆 KiddoLens 人氣榜</button>
-        <button class="rec-tab" data-tab="smart">🎯 為 ${profile.name} 推薦</button>
+        <button class="rec-tab active" data-tab="popular">🏆 人氣榜</button>
+        <button class="rec-tab" data-tab="manage">↕ 頻道排序</button>
       </div>
-      <div id="rec-content-popular" class="rec-content">
-        <div class="wizard-channel-grid" id="rec-grid-popular"></div>
+      <div id="manage-content-popular" class="rec-content">
+        <div class="wizard-channel-grid" id="manage-grid-popular"></div>
       </div>
-      <div id="rec-content-smart" class="rec-content" style="display:none;">
-        <div class="wizard-channel-grid" id="rec-grid-smart"></div>
+      <div id="manage-content-manage" class="rec-content" style="display:none;">
+        <ul id="manage-channel-list" class="manage-channel-list"></ul>
       </div>
     </div>
   `;
   document.body.appendChild(modal);
 
   // Tab switching
+  function switchTab(tabName) {
+    modal.querySelectorAll('.rec-tab').forEach(t => t.classList.remove('active'));
+    modal.querySelector(`.rec-tab[data-tab="${tabName}"]`).classList.add('active');
+    ['popular', 'manage'].forEach(name => {
+      const el = document.getElementById(`manage-content-${name}`);
+      if (el) el.style.display = name === tabName ? '' : 'none';
+    });
+    if (tabName === 'manage') {
+      renderManageChannelList(document.getElementById('manage-channel-list'));
+    }
+  }
   modal.querySelectorAll('.rec-tab').forEach(tab => {
-    tab.onclick = () => {
-      modal.querySelectorAll('.rec-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById('rec-content-popular').style.display = tab.dataset.tab === 'popular' ? '' : 'none';
-      document.getElementById('rec-content-smart').style.display = tab.dataset.tab === 'smart' ? '' : 'none';
-    };
+    tab.onclick = () => switchTab(tab.dataset.tab);
   });
 
   // Close
   document.getElementById('close-add-channel').onclick = () => modal.remove();
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
 
-  // Helper: re-render both grids with the given channel list
-  function renderBothGrids(channels) {
-    const el = document.getElementById('add-channel-modal');
-    if (!el) return; // modal was closed
-    const addedIds = new Set(getCurrentProfile().channels.map(c => c.id));
-    renderRecGrid(document.getElementById('rec-grid-popular'), channels, addedIds);
-    renderRecGrid(document.getElementById('rec-grid-smart'), getSmartRecommendations(channels), addedIds);
+  // In-modal YouTube search (only when API key is set)
+  if (hasApiKey) {
+    const searchInput = document.getElementById('modal-channel-search');
+    const searchResults = document.getElementById('modal-search-results');
+    let modalSearchDebounce;
+
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.trim();
+      clearTimeout(modalSearchDebounce);
+      if (query.length < 2) { searchResults.classList.add('hidden'); return; }
+      modalSearchDebounce = setTimeout(() => searchChannelsInModal(query, searchResults, modal), 400);
+    });
+
+    // Hide dropdown when clicking outside search area
+    modal.querySelector('.modal-content').addEventListener('click', (e) => {
+      if (!e.target.closest('#modal-channel-search') && !e.target.closest('#modal-search-results')) {
+        searchResults.classList.add('hidden');
+      }
+    });
   }
 
-  // Step 1: Show CURATED_CHANNELS immediately (sync, guaranteed content)
+  // Helper: re-render popular grid
+  function renderBothGrids(channels) {
+    if (!document.getElementById('add-channel-modal')) return;
+    const addedIds = new Set(getCurrentProfile().channels.map(c => c.id));
+    renderRecGrid(document.getElementById('manage-grid-popular'), channels, addedIds);
+  }
+
+  // Expose on modal element so handleChannelAdd can refresh grids without re-opening
+  modal._renderBothGrids = renderBothGrids;
+  modal._channelsCache = null;
+
+  // Show CURATED_CHANNELS immediately (sync fallback)
   renderBothGrids([...CURATED_CHANNELS]);
 
-  // Step 2: Fetch real community rankings and always re-render with them.
-  // Also enriches any channels missing thumbnails via YouTube API (if key is set).
+  // Fetch real community rankings, enrich thumbnails, then re-render
   fetchRankingsRaw()
     .then(async channels => {
-      if (!document.getElementById('add-channel-modal')) return; // modal closed
+      if (!document.getElementById('add-channel-modal')) return;
 
-      // Fill in missing thumbnails via YouTube API (batch, one request)
       const missing = channels.filter(ch => !ch.thumbnail);
       if (missing.length > 0 && state.data.apiKey) {
         try {
@@ -3107,13 +3060,176 @@ async function showAddChannelModal() {
               if (ch) ch.thumbnail = item.snippet.thumbnails.default?.url || '';
             });
           }
-        } catch (e) { /* thumbnails remain empty, ui-avatars fallback will handle it */ }
+        } catch (e) { /* thumbnails remain empty, ui-avatars fallback handles it */ }
       }
 
-      if (!document.getElementById('add-channel-modal')) return; // closed while fetching
+      if (!document.getElementById('add-channel-modal')) return;
+      modal._channelsCache = channels;
       renderBothGrids(channels);
     })
-    .catch(() => {/* curated fallback already visible */ });
+    .catch(() => { /* curated fallback already visible */ });
+}
+
+// Format subscriber count: 1200000 → "120萬", 45000 → "4.5萬", 800 → "800"
+function fmtSubs(n) {
+  if (!n || n < 0) return null;
+  if (n >= 10000000) return `${Math.round(n / 10000000)}千萬`;
+  if (n >= 1000000) return `${(n / 1000000).toFixed(n >= 10000000 ? 0 : 1).replace(/\.0$/, '')}百萬`;
+  if (n >= 10000) return `${Math.round(n / 10000)}萬`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}千`;
+  return String(n);
+}
+
+// Search YouTube channels inside the manage-channel modal
+async function searchChannelsInModal(query, resultsEl, modal) {
+  if (!state.data.apiKey || !modal.isConnected) return;
+  resultsEl.innerHTML = '<li style="padding:10px;color:#aaa;">搜尋中…</li>';
+  resultsEl.classList.remove('hidden');
+
+  try {
+    // 1. Search for channels
+    const searchRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(query)}&maxResults=6&key=${state.data.apiKey}`
+    );
+    const searchData = await searchRes.json();
+    if (!modal.isConnected) return;
+
+    const items = searchData.items || [];
+    if (items.length === 0) {
+      resultsEl.innerHTML = '<li style="padding:10px;color:#aaa;">找不到符合的頻道</li>';
+      return;
+    }
+
+    // 2. Batch-fetch subscriber counts (statistics)
+    const ids = items.map(i => i.snippet.channelId).join(',');
+    let statsMap = {};
+    try {
+      const statsRes = await fetch(
+        `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${ids}&key=${state.data.apiKey}`
+      );
+      const statsData = await statsRes.json();
+      (statsData.items || []).forEach(ch => {
+        statsMap[ch.id] = parseInt(ch.statistics?.subscriberCount || '0', 10);
+      });
+    } catch (_) { /* subscriber counts unavailable — degrade gracefully */ }
+
+    if (!modal.isConnected) return;
+
+    // 3. Build KiddoLens count lookup from cache
+    const kiddoMap = {};
+    (_rankingsCache || []).forEach(ch => { if (ch.count) kiddoMap[ch.id] = ch.count; });
+
+    // 4. Render results
+    resultsEl.innerHTML = '';
+    const profile = getCurrentProfile();
+    items.forEach(item => {
+      const channelData = {
+        id: item.snippet.channelId,
+        name: item.snippet.channelTitle,
+        thumbnail: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.default?.url || ''
+      };
+      const isAdded = profile.channels.some(c => c.id === channelData.id);
+      const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channelData.name)}&size=88&background=random`;
+
+      const ytSubs = fmtSubs(statsMap[channelData.id]);
+      const kiddoCount = kiddoMap[channelData.id];
+
+      const statsHtml = [
+        ytSubs ? `<span class="search-stat yt-stat">▶ ${ytSubs} 訂閱</span>` : '',
+        kiddoCount ? `<span class="search-stat kiddo-stat">🐣 ${kiddoCount} 家庭使用</span>` : ''
+      ].filter(Boolean).join('');
+
+      const li = document.createElement('li');
+      li.className = 'search-result-item';
+      li.style.opacity = isAdded ? '0.6' : '1';
+      li.innerHTML = `
+        <img src="${channelData.thumbnail || fallback}" class="search-avatar"
+          onerror="this.onerror=null;this.src='${fallback}'" />
+        <div class="search-info">
+          <span class="search-name">${channelData.name}</span>
+          <div class="search-stats-row">
+            ${statsHtml}
+            ${isAdded ? '<span class="search-stat added-stat">✓ 已加入</span>' : ''}
+          </div>
+        </div>
+      `;
+      if (!isAdded) {
+        li.onclick = () => {
+          resultsEl.classList.add('hidden');
+          const searchInput = document.getElementById('modal-channel-search');
+          if (searchInput) searchInput.value = '';
+          handleChannelAdd(channelData);
+        };
+      }
+      resultsEl.appendChild(li);
+    });
+  } catch (e) {
+    if (modal.isConnected) {
+      resultsEl.innerHTML = '<li style="padding:10px;color:#e55;">搜尋失敗，請稍後再試</li>';
+    }
+  }
+}
+
+// Render the "已加入" tab channel list with drag-to-reorder and delete
+function renderManageChannelList(listEl) {
+  if (!listEl) return;
+  const profile = getCurrentProfile();
+  listEl.innerHTML = '';
+
+  if (profile.channels.length === 0) {
+    listEl.innerHTML = '<li style="padding:20px;text-align:center;color:#aaa;">還沒有加入頻道。</li>';
+    return;
+  }
+
+  let dragSrcIndex = null;
+
+  profile.channels.forEach((channel, index) => {
+    const li = document.createElement('li');
+    li.className = 'manage-channel-item';
+    li.draggable = true;
+    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&size=64&background=random&rounded=true`;
+    li.innerHTML = `
+      <span class="drag-handle" title="拖曳排序">⠿</span>
+      <img src="${channel.thumbnail || fallback}" class="manage-channel-thumb"
+        onerror="this.onerror=null;this.src='${fallback}'" />
+      <span class="manage-channel-name">${channel.name}</span>
+      <button class="manage-channel-delete" title="移除頻道">✕</button>
+    `;
+
+    // Delete
+    li.querySelector('.manage-channel-delete').onclick = (e) => {
+      e.stopPropagation();
+      profile.channels.splice(index, 1);
+      saveLocalData();
+      renderChannelNav();
+      fetchAllVideos();
+      renderManageChannelList(listEl);
+      const modal = document.getElementById('add-channel-modal');
+      if (modal?._renderBothGrids) modal._renderBothGrids(modal._channelsCache || [...CURATED_CHANNELS]);
+    };
+
+    // Drag reorder
+    li.addEventListener('dragstart', (e) => {
+      dragSrcIndex = index;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => li.classList.add('dragging'), 0);
+    });
+    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+    li.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (dragSrcIndex === null || dragSrcIndex === index) return;
+      const channels = profile.channels;
+      const [moved] = channels.splice(dragSrcIndex, 1);
+      channels.splice(index, 0, moved);
+      dragSrcIndex = null;
+      saveLocalData();
+      renderChannelNav();
+      renderManageChannelList(listEl);
+    });
+
+    listEl.appendChild(li);
+  });
 }
 
 function renderRecGrid(grid, channels, addedIds) {
@@ -3153,22 +3269,30 @@ function renderRecGrid(grid, channels, addedIds) {
 function handleChannelAdd(channel) {
   const profiles = state.data.profiles;
 
-  // Single profile: add immediately and close
+  // Single profile: add and stay in modal, refresh grids
   if (profiles.length <= 1) {
     const profile = getCurrentProfile();
     if (!profile.channels.some(c => c.id === channel.id)) {
       profile.channels.push({ id: channel.id, name: channel.name, thumbnail: channel.thumbnail || '' });
       saveLocalData();
       renderChannelNav();
-      renderChannelList();
       fetchAllVideos();
     }
-    document.getElementById('add-channel-modal')?.remove();
+    _refreshAddChannelModal();
     return;
   }
 
   // Multiple profiles: show profile picker
   showProfilePickerForChannel(channel);
+}
+
+// Refresh grids and manage list inside the open add-channel modal (without closing it)
+function _refreshAddChannelModal() {
+  const modal = document.getElementById('add-channel-modal');
+  if (!modal) return;
+  if (modal._renderBothGrids) modal._renderBothGrids(modal._channelsCache || [...CURATED_CHANNELS]);
+  const manageList = document.getElementById('manage-channel-list');
+  if (manageList) renderManageChannelList(manageList);
 }
 
 function showProfilePickerForChannel(channel) {
@@ -3217,10 +3341,9 @@ function showProfilePickerForChannel(channel) {
 
     saveLocalData();
     renderChannelNav();
-    renderChannelList();
     fetchAllVideos();
     overlay.remove();
-    document.getElementById('add-channel-modal')?.remove();
+    _refreshAddChannelModal();
   };
 }
 
